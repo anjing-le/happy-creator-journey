@@ -1,1 +1,3 @@
-![探索并分享自媒体创作最佳实践](assets/project-goal.png)
+**English** | [简体中文](README.zh-CN.md)
+
+![Explore and share content creation best practices](assets/project-goal.en.png)
