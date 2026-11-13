@@ -5,3 +5,10 @@
 .private/
 .pocket/
 raw-private/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/.local/
+desktop/test-results/
+desktop/playwright-report/
