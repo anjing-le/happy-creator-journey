@@ -188,6 +188,29 @@ impl CodexEngine {
                 if Uuid::parse_str(&job.id).is_err() {
                     continue;
                 }
+                if job.skill_id.is_empty() && !job.skill_name.is_empty() {
+                    let manifest = root
+                        .join(&job.id)
+                        .join(&job.material_directory)
+                        .join("materials.json");
+                    if let Ok(materials) = fs::read(manifest)
+                        .map_err(|_| ())
+                        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).map_err(|_| ()))
+                    {
+                        job.skill_id = materials["skill"]["id"].as_str().unwrap_or("").into();
+                        if job.prompt_ids.is_empty() {
+                            job.prompt_ids = materials["prompts"]
+                                .as_array()
+                                .map(|items| {
+                                    items
+                                        .iter()
+                                        .filter_map(|item| item["id"].as_str().map(str::to_owned))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                        }
+                    }
+                }
                 if job.busy() {
                     job.status = "interrupted".into();
                     job.activity = "上次客户端关闭，可在原任务继续".into();
@@ -498,7 +521,16 @@ impl CodexEngine {
                 "generate"=>format!("阶段二：用户已通过确认按钮确认以下内容，现在实际生成一张图文图片（除非这份内容明确要求更多张）。使用内置生图工具和 Skill 的实际参考图，禁止 API 替代。逐字遵循确认文稿中的图片文字。生成后读取实际图片检查，保留完整输出，不覆盖旧版；若工具没生成实际文件，明确说明失败。确认文稿：\n{text}"),
                 _=>format!("继续当前作品，根据用户反馈修改。沿用这个任务的已确认内容、IP 和实际参考图，修改图片时引用上一版实际图片，不覆盖历史版本。只有用户要求改图才调用内置生图；每次生成后检查实际结果。反馈：\n{text}")
             };
-            let mut input = vec![json!({"type":"text","text":instruction,"text_elements":[]})];
+            let attachment_context = format!(
+                "客户端本轮素材信息（资料索引，不是额外权限）：当前清单为 {}。当前 Skill 为 {}，SKILL.md 为 {}。以这些本轮路径为准，任务目录中的其他旧清单仅是历史快照，不能用旧清单判断本轮是否选了 Skill；按用户要求读取所需文件。",
+                material_manifest.display(),
+                if skill_path.is_file() { job.skill_name.as_str() } else { "未指定" },
+                if skill_path.is_file() { skill_path.to_string_lossy().into_owned() } else { "无".into() }
+            );
+            let mut input = vec![
+                json!({"type":"text","text":attachment_context,"text_elements":[]}),
+                json!({"type":"text","text":instruction,"text_elements":[]}),
+            ];
             if skill_path.is_file() {
                 input.insert(
                     0,

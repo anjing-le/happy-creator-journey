@@ -26,6 +26,7 @@ export function Creation({ name, back }: { name: string; back: () => void }) {
   const messagesView = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const hydratedSelection = useRef('');
   const jobsRef = useRef(jobs); jobsRef.current = jobs;
   const submittingRef = useRef(submitting); submittingRef.current = submitting;
   const visibleJobs = jobs.filter(j => (j.mode || 'image') === mode);
@@ -48,6 +49,7 @@ export function Creation({ name, back }: { name: string; back: () => void }) {
     return () => { disposed = true; clearInterval(timer); window.removeEventListener('focus', focus); };
   }, []);
   useEffect(() => { localStorage.setItem(`creatorx.chat.${mode}`, selected); }, [selected, mode]);
+  useEffect(() => { if (job && hydratedSelection.current !== job.id) { hydratedSelection.current = job.id; setSkillId(job.skillId || ''); setPromptIds(job.promptIds || []); setAttachmentsChanged(false); } }, [job?.id]);
   useEffect(() => { if (enlarged) dialog.current?.showModal(); else dialog.current?.close(); }, [enlarged]);
   const lastMessage = job?.messages.at(-1)?.text;
   useEffect(() => { const view = messagesView.current; if (view && follow.current) view.scrollTop = view.scrollHeight; }, [lastMessage, job?.images.length, selected]);
@@ -57,7 +59,7 @@ export function Creation({ name, back }: { name: string; back: () => void }) {
     catch (e) { setConnection('连接未完成'); setError(errorText(e)); }
   }
   function select(j?: Job) {
-    setSelected(j?.id || ''); setSkillId(j?.skillId || ''); setPromptIds(j?.promptIds || []);
+    hydratedSelection.current = j?.id || ''; setSelected(j?.id || ''); setSkillId(j?.skillId || ''); setPromptIds(j?.promptIds || []);
     setAttachmentsChanged(false); setMaterialsOpen(false); setText(''); setError(''); follow.current = true; composer.current?.focus();
   }
   async function send() {
