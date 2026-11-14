@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "CreatorX",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "identifier": "cc.anjing.creatorx",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -20,8 +20,8 @@
         "minHeight": 440,
         "center": true,
         "resizable": true,
-        "theme": "Dark",
-        "backgroundColor": "#20211f",
+        "theme": "Light",
+        "backgroundColor": "#f7f5ef",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       }

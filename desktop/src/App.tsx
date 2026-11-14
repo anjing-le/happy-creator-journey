@@ -142,7 +142,7 @@ export function App() {
   return <main className="workspace" aria-label="CreatorX">
     <div className="drag-region" data-tauri-drag-region />
     <Workspace />
-    <button ref={trigger} className={`update-trigger ${phase === 'available' ? 'has-update' : ''}`} aria-label={copy.updates} title={copy.updates} onClick={() => { void checkUpdates(true); }}><Arrow /></button>
+    <button ref={trigger} className={`update-trigger ${phase === 'available' ? 'has-update' : ''}`} aria-label={copy.updates} onClick={() => { void checkUpdates(true); }}><Arrow /></button>
     {open && <div className="scrim" onMouseDown={event => { if (event.target === event.currentTarget) dismiss(); }}>
       <div ref={modal} className="update-panel" role="dialog" aria-modal="true" aria-labelledby="update-title" tabIndex={-1}>
         {!busy && phase !== 'restart' && <button className="dismiss" onClick={dismiss} aria-label={copy.close}>×</button>}
