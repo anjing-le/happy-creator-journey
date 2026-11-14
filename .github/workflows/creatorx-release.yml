@@ -107,6 +107,9 @@ jobs:
         run: |
           node -e "if (!process.env.TAURI_SIGNING_PRIVATE_KEY?.trim()) throw new Error('CreatorX updater signing key is missing')"
           npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+      - name: Check Windows release CLI without opening a window
+        if: runner.os == 'Windows'
+        run: node scripts/check-cli.mjs src-tauri/target/${{ matrix.target }}/release/creatorx.exe
       - name: Stage platform artifacts
         run: node scripts/validate-release.mjs --stage --platform ${{ matrix.platform }} --bundle-dir src-tauri/target/${{ matrix.target }}/release/bundle --output-dir staged
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

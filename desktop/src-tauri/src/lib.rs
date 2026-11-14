@@ -1,6 +1,24 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
+pub mod cli;
 mod library;
+
+#[cfg(target_os = "macos")]
+fn apply_transparent_dock_icon() -> Result<(), Box<dyn std::error::Error>> {
+    use objc2::{AllocAnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let main_thread = MainThreadMarker::new().ok_or("Dock icon requires the main thread")?;
+    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    let image = NSImage::initWithData(NSImage::alloc(), &data).ok_or("Invalid Dock icon PNG")?;
+    // Set the original alpha image directly; bundle icons remain the fallback
+    // and continue to serve Finder and launch entries when the app is closed.
+    unsafe {
+        NSApplication::sharedApplication(main_thread).setApplicationIconImage(Some(&image));
+    }
+    Ok(())
+}
 
 pub fn run() {
     let app = tauri::Builder::default()
@@ -9,9 +27,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             library::library_list,
             library::library_save,
-            library::library_import_image
+            library::library_import_image,
+            library::library_skill_files,
+            library::library_open_skill_folder
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            apply_transparent_dock_icon()?;
             app.manage(library::LibraryStore::new(
                 app.path().app_data_dir()?.join("library"),
             )?);

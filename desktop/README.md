@@ -1,8 +1,6 @@
 # CreatorX
 
-当前版本 **0.0.5**：首页采用暖米白背景、低饱和淡色区域与留白中的透明安静插画，不显示入口名、说明或悬停文案。上排三个创作入口，下排整行素材库，整块可点击；保留无障碍名称与键盘聚焦提示。先做素材库，创作执行随后逐步接入。
-
-素材库区分角色 IP 与创作场景，默认展示参考图／样图套组，支持展开、编辑提示词或 Skill 文档，以及导入图片与 SKILL.md。Skill 当前仅保存文档快照，尚未导入完整包依赖或执行。个人素材保存在本机，不随公共安装包分发。
+本轮 0.0.7：素材库只分提示词和 Skills。提示词支持分类树、搜索、用途筛选、复制、编辑和参考图；Skill 按真实文件夹保存，可整夹导入、查看文件、编辑 SKILL.md 或打开本地目录。目前不执行 Skill，也未接入 AI 创作。
 
 ```sh
 cd desktop
@@ -10,24 +8,20 @@ npm ci
 npm run desktop
 ```
 
-`npm run verify` 检查前端和发布配置，`npm test` 检查更新策略；`cargo test --locked --manifest-path src-tauri/Cargo.toml --lib` 验证素材保存重读、修订冲突与图片原样导入。
+本地 CLI 与界面共用同一份数据，无需启动窗口。命令发现、JSON 输入、修订检查和完整 Skill 导入见 [CLI 说明](CLI.md)。
 
-macOS 数据目录为 `~/Library/Application Support/cc.anjing.creatorx/library/`，包含 `entries/` 记录与 `images/` 原图。Windows 使用系统应用数据目录。编辑携带修订号，冲突时拒绝覆盖；移除图片引用不删除原始文件。
+```sh
+creatorx schema
+creatorx library list --kind prompt --search 蜡笔
+creatorx library categories
+```
 
-发布使用独立的 CreatorX 更新签名密钥；私钥保存在仓库之外，不复用 macos-x 密钥。GitHub Releases 提供签名安装包与 latest.json。后台仅在启动且距上次成功检查超过一小时时检查；有新版只点亮入口，用户点击“更新并重启”才下载、验签和安装。开发热重载不代表 OTA。
+macOS 数据位于 `~/Library/Application Support/cc.anjing.creatorx/library/`：`entries/` 保存记录，`images/` 保存原图，`skills/<id>/` 保存 Skill 的真实文件夹。Windows 使用系统应用数据目录。私人材料与 Hub 导出不随公共安装包分发。
 
-更新签名与操作系统代码签名是两件事。当前 macOS 包使用 ad hoc 签名，未做 Apple 公证；Windows 未配置代码签名证书。正式对外分发前需完善相应身份与信任链。
+验证：`npm run verify`、`npm test`、`cargo test --locked --manifest-path src-tauri/Cargo.toml`；打包后用 `node scripts/check-cli.mjs <应用可执行文件>` 检查真实 CLI。测试覆盖跨进程冲突、完整 Skill 资源保留、外部文档修改和中断保存恢复。
 
-光标使用本仓库原创的简洁箭头与手形，保留原生文字／缩放光标；不打包 EnglishX／FinanceX 仅供个人预览的第三方光标素材。
+2026-11-14：按用户要求，旧的两份本机样例已移入废纸篓。随后从私人 Hub 迁入 41 条提示词、4 个分类及 16 张参考图，逐项核对正文、名称、来源时间与图片字节；重复迁入无新增。用途标签根据标题整理，可修改，不代表效果验证。原 Hub 数据未改动。
 
-## 当前验证
+首页维持暖米白、无可见文字的四个插画入口；素材维护界面使用清晰文字。插画原图位于 `public/entrances/`，提示词见 [入口插画](entrance-prompts.md)。
 
-2026-11-14：前端、更新策略与素材保存测试通过。[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43600927777)及[三平台打包与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43600930218)通过，安装包见 [0.0.5 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.5)。Windows 真机安装与交互尚未验收。
-
-本机已通过 OTA 从 0.0.2 安装到 0.0.3，磁盘版本已核对。自动重启后窗口连接异常，结束进程后干净启动正常；重启唤窗仍待排查，不算完整 OTA 体验验收通过。原生客户端已核对首页四入口、安静图片与提示词展开、角色编辑保存、场景两张样图切换及 Skill 文档展开；保存后本地记录修订号已更新。
-
-本机个人库先放入安静 IP 和金融知识图解样例，素材取自已有本地 Skill，保留原图与来源；没有把个人素材打进公共安装包。后续对着 UI 打磨，再确定完整 Skill 包、角色关联与创作执行。
-
-0.0.4：首页四张插画由内置 imagegen 生成，原图位于 `public/entrances/`，完整提示词见 [入口插画提示词](entrance-prompts.md)。原生客户端已核对新版首页，浏览器预览已核对悬停／键盘聚焦说明。通过 OTA 安装后仍需干净启动才能重新连接窗口，重启唤窗问题继续保留；升级前后本机素材库五个文件的 SHA-256 全部一致。
-
-0.0.5：四张透明底插画由内置 imagegen 生成，v2 原图与提示词继续保存在原目录。已通过前端构建及发布配置检查；本机通过本地构建安装，核对了浅色窗口、无字首页、点击素材库与返回首页。安装前后本机素材库五个文件的 SHA-256 一致。双平台检查与三平台构建签名验证已通过，安装包已发布；本次不宣称完成 OTA 升级验收。
+OTA 保持独立签名、用户确认后下载验签；更新签名不等于 Apple 公证或 Windows 代码签名。此前 OTA 自动重启后的窗口唤起仍待排查，不能以本地构建安装代替完整 OTA 验收。图标的透明检查与各系统位置的视觉状态见 [图标验证](icon-validation.md)，未核对位置不宣称完成。

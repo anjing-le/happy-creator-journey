@@ -442,9 +442,12 @@ dependencies = [
 
 [[package]]
 name = "creatorx"
-version = "0.0.5"
+version = "0.0.7"
 dependencies = [
  "base64 0.22.1",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "sha2",
