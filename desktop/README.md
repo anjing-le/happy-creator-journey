@@ -1,6 +1,8 @@
 # CreatorX
 
-当前仅为空白客户端与 OTA 更新入口，创作功能随后逐步设计。
+当前版本 **0.0.3**：首页提供文、图、视频与素材库。先做素材库，创作执行随后逐步接入。
+
+素材库区分角色 IP 与创作场景，默认展示参考图／样图套组，支持展开、编辑提示词或 Skill 文档，以及导入图片与 SKILL.md。Skill 当前仅保存文档快照，尚未导入完整包依赖或执行。个人素材保存在本机，不随公共安装包分发。
 
 ```sh
 cd desktop
@@ -8,7 +10,9 @@ npm ci
 npm run desktop
 ```
 
-`npm run verify` 检查前端和发布配置，`npm test` 检查更新策略。
+`npm run verify` 检查前端和发布配置，`npm test` 检查更新策略；`cargo test --locked --manifest-path src-tauri/Cargo.toml --lib` 验证素材保存重读、修订冲突与图片原样导入。
+
+macOS 数据目录为 `~/Library/Application Support/cc.anjing.creatorx/library/`，包含 `entries/` 记录与 `images/` 原图。Windows 使用系统应用数据目录。编辑携带修订号，冲突时拒绝覆盖；移除图片引用不删除原始文件。
 
 发布使用独立的 CreatorX 更新签名密钥；私钥保存在仓库之外，不复用 macos-x 密钥。GitHub Releases 提供签名安装包与 latest.json。后台仅在启动且距上次成功检查超过一小时时检查；有新版只点亮入口，用户点击“更新并重启”才下载、验签和安装。开发热重载不代表 OTA。
 
@@ -18,6 +22,8 @@ npm run desktop
 
 ## 当前验证
 
-2026-11-13：本机已从 0.0.1 通过线上更新入口下载、验签、安装并重启至 0.0.2；升级后窗口与版本显示正常，再次检查显示“已是最新版本”。正常包验签通过，损坏包及被篡改的签名受信注释被拒绝。
+2026-11-14：前端、更新策略与素材保存测试通过。[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43595218407)及[三平台打包与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43595220296)通过，安装包见 [0.0.3 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.3)。Windows 真机安装与交互尚未验收。
 
-[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43442225254)和[三平台打包与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43442233737)通过。Apple Silicon、Intel Mac、Windows x64 安装包已在 [0.0.2 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.2) 提供；Windows 真机安装与交互尚未验收。
+本机已通过 OTA 从 0.0.2 安装到 0.0.3，磁盘版本已核对。自动重启后窗口连接异常，结束进程后干净启动正常；重启唤窗仍待排查，不算完整 OTA 体验验收通过。原生客户端已核对首页四入口、安静图片与提示词展开、角色编辑保存、场景两张样图切换及 Skill 文档展开；保存后本地记录修订号已更新。
+
+本机个人库先放入安静 IP 和金融知识图解样例，素材取自已有本地 Skill，保留原图与来源；没有把个人素材打进公共安装包。后续对着 UI 打磨，再确定完整 Skill 包、角色关联与创作执行。
