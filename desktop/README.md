@@ -32,6 +32,6 @@ OTA 保持独立签名、用户确认后下载验签；更新签名不等于 App
 
 任务保存于应用数据目录 `creations/<id>/`：包含 Skill 与提示词快照、参考图、确认稿、对话及 `artifacts/` 原图。Codex 会话 ID 用于继续改稿；重启后保留任务记录。任务只能在工作区写入，不自动发布、推送或改原网站。未支持的交互审批不会自动同意。关闭应用会中断本客户端启动的 Codex 进程，重新打开后可继续原任务；正在创作时阻止 OTA 安装。
 
-本机真实后端试跑已通过“文稿 → 原生出图 → 同会话改图”，保留两张实际图片。`codex.rs` 中的真实服务测试默认忽略；只有显式提供私有 `CREATORX_LIVE_CASE` 才运行，CI 不调用付费模型。普通测试覆盖任务恢复、未确认内容拦截、缺少实际图片时报告失败、分类移动的修订冲突及清空分类保留正文。
+本机真实后端试跑已通过“文稿 → 原生出图 → 同会话改图”，保留两张实际图片。安装版已核对两版图片展示、重启后的同任务继续对话、新增空分类和拖拽移动；临时测试分类已清理，当前 42 份素材全部未分类。`codex.rs` 中的真实服务测试默认忽略；只有显式提供私有 `CREATORX_LIVE_CASE` 才运行，CI 不调用付费模型。普通测试覆盖任务恢复、未确认内容拦截、缺少实际图片时报告失败、分类移动的修订冲突及清空分类保留正文。
 
-此前 [0.0.7 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.7) 的三平台构建与签名通过。0.0.8 的发布状态以 GitHub Actions 与 Release 为准；Windows 原生 Codex 运行、桌面交互与图标仍需真机验证。
+[0.0.8 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.8)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43617106501)、[三平台构建、Windows 发布版 CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43617109128)均已完成。Windows 原生 Codex 连接、桌面交互与图标仍需真机验证；本轮本地安装不能代替 OTA 自动重启验收。
