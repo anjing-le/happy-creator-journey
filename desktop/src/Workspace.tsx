@@ -5,6 +5,11 @@ import { AssetLibrary, AssetEntry, AssetKind, emptyEntry, imageUrl, importImage,
 type Route = { page: 'home' } | { page: 'library' } | { page: 'creation'; name: string };
 const HOME: Route = { page: 'home' };
 const native = isTauri();
+const entrances = [
+  { name: '文', image: 'writing', description: '安静地写下想法，打磨成一篇文章' },
+  { name: '图片', image: 'images', description: '从内容与提示词，做出封面和内页' },
+  { name: '视频', image: 'video', description: '组织素材与 Skill，剪辑成一段视频' },
+];
 function BackIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m14 6-6 6 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
 function PlusIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>; }
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -31,8 +36,14 @@ export function Workspace() {
   }, [position, history]);
   if (route.page === 'home') return <section className="home" aria-label="创作首页">
     <div className="home-entries">
-      <div className="creation-entries">{['文', '图', '视频'].map(name => <button key={name} className="entry-card" onClick={() => navigate({ page: 'creation', name })}>{name}</button>)}</div>
-      <button className="library-entry" onClick={() => navigate({ page: 'library' })}>素材库</button>
+      <div className="creation-entries">{entrances.map(({ name, image, description }) => <button key={name} className={`entry-card entrance-${image}`} aria-label={name} aria-describedby={`entrance-${image}`} onClick={() => navigate({ page: 'creation', name })}>
+        <span className="entrance-art"><img src={`/entrances/${image}-v1.png`} alt="" draggable={false} /></span>
+        <span className="entrance-copy"><span className="entrance-name">{name}</span><span className="entrance-description" id={`entrance-${image}`}>{description}</span></span>
+      </button>)}</div>
+      <button className="library-entry" aria-label="素材库" aria-describedby="entrance-library" onClick={() => navigate({ page: 'library' })}>
+        <img src="/entrances/library-v1.png" alt="" draggable={false} />
+        <span className="entrance-copy"><span className="entrance-name">素材库</span><span className="entrance-description" id="entrance-library">角色、提示词、Skills 与参考素材，创作的十八般兵器</span></span>
+      </button>
     </div>
   </section>;
   if (route.page === 'library') return <LibraryView back={back} />;
