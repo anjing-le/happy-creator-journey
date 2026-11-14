@@ -29,4 +29,4 @@ jobs:
           workspaces: desktop/src-tauri -> target
       - run: npm ci
       - run: npm run verify && npm test
-      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib

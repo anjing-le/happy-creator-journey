@@ -6,6 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { downloadPercent, shouldCheckAtStartup } from './update-policy';
+import { Workspace } from './Workspace';
 
 type Phase = 'idle' | 'checking' | 'available' | 'current' | 'installing' | 'restart' | 'error';
 const native = isTauri();
@@ -71,6 +72,10 @@ export function App() {
   }
 
   async function install() {
+    if (document.querySelector('[data-editing]')) {
+      setMessage(zh ? '请先保存或退出素材编辑，再更新客户端。' : 'Save or leave the asset editor before updating.');
+      setPhase('error'); return;
+    }
     const candidate = update.current;
     if (!candidate || installing.current) return;
     installing.current = true;
@@ -136,6 +141,7 @@ export function App() {
   const title = phase === 'available' ? copy.available : phase === 'current' ? copy.current : copy.updates;
   return <main className="workspace" aria-label="CreatorX">
     <div className="drag-region" data-tauri-drag-region />
+    <Workspace />
     <button ref={trigger} className={`update-trigger ${phase === 'available' ? 'has-update' : ''}`} aria-label={copy.updates} title={copy.updates} onClick={() => { void checkUpdates(true); }}><Arrow /></button>
     {open && <div className="scrim" onMouseDown={event => { if (event.target === event.currentTarget) dismiss(); }}>
       <div ref={modal} className="update-panel" role="dialog" aria-modal="true" aria-labelledby="update-title" tabIndex={-1}>

@@ -1,11 +1,20 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
+mod library;
 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .invoke_handler(tauri::generate_handler![
+            library::library_list,
+            library::library_save,
+            library::library_import_image
+        ])
         .setup(|app| {
+            app.manage(library::LibraryStore::new(
+                app.path().app_data_dir()?.join("library"),
+            )?);
             let chinese = std::env::var("LANG").unwrap_or_default().starts_with("zh");
             let check = MenuItem::with_id(
                 app,

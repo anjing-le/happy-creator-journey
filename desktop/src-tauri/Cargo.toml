@@ -1,6 +1,6 @@
 [package]
 name = "creatorx"
-version = "0.0.2"
+version = "0.0.3"
 description = "Anjing CreatorX desktop workspace"
 edition = "2021"
 rust-version = "1.90"
@@ -13,7 +13,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "=2.7.1", features = [] }
 
 [dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "=2.12.0", features = [] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+tauri = { version = "=2.12.0", features = ["protocol-asset"] }
 tauri-plugin-process = "=2.4.0"
 tauri-plugin-updater = "=2.13.1"
+
+[dev-dependencies]
+tempfile = "3"
