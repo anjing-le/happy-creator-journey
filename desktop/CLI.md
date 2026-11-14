@@ -20,7 +20,7 @@ macOS 原始入口为 `~/Applications/CreatorX.app/Contents/MacOS/creatorx`。�
 新提示词的最小 JSON：
 
 ```json
-{"kind":"prompt","name":"文章整理","prompt":"将以下材料整理为清晰的文章大纲：\n[材料]","category":"默认","tags":["写作"]}
+{"kind":"prompt","name":"文章整理","prompt":"将以下材料整理为清晰的文章大纲：\n[材料]","category":"","tags":["写作"]}
 ```
 
 ```sh
@@ -35,7 +35,9 @@ creatorx library add-category --name 写作
 creatorx library save --file edited-entry.json --if-revision 3
 ```
 
-界面与 CLI 共用进程间文件锁和修订检查；旧修订会被拒绝覆盖。切回素材库时自动重新读取，也可以点击“刷新”。分类、标签、备注、来源和原始时间随记录保存；提示词正文不被自动改写。
+界面与 CLI 共用进程间文件锁和修订检查；旧修订会被拒绝覆盖。切回素材库时自动重新读取，也可以点击“刷新”。分类、标签、备注、来源和原始时间随记录保存；提示词正文不被自动改写。分类为空表示未分类；界面可新增分类，并将素材拖入目标分类。
+
+`creatorx library clear-categories` 会清空所有分类及素材的分类归属，保留素材、参考图、Skill 文件和原始时间，逐条增加修订号。它是明确的本地数据修改，执行前应按需要备份。
 
 ## Skill 文件夹
 

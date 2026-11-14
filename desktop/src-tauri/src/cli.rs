@@ -39,11 +39,12 @@ fn schema() -> Value {
         {"usage":"library get ID","effect":"read complete entry and prompt"},
         {"usage":"library save (--stdin | --file JSON) [--if-revision N]","effect":"create/update entry; updates require current revision; Skill saves create/update a real folder"},
         {"usage":"library import-skill --folder PATH [--name NAME] [--category NAME]","effect":"copy complete folder locally; scripts are never executed"},
+        {"usage":"library clear-categories","effect":"remove all category assignments; preserve materials"},
         {"usage":"library categories","effect":"read categories, including empty ones"},
         {"usage":"library add-category --name NAME","effect":"create a category without replacing existing categories"},
         {"usage":"library skill-files ID","effect":"read relative package file paths"},
         {"usage":"library import-image --file PATH","effect":"copy and deduplicate reference image bytes locally"}
-    ],"entry":{"kind":"prompt|skill","name":"required","prompt":"required for prompt","skillMarkdown":"SKILL.md for skill","category":"defaults to 默认","tags":"string[]","notes":"string","images":"stored image hashes","id":"empty for create","revision":"read before updating"},"limits":{"skillFiles":512,"skillTotalMB":64,"skillFileMB":16},"storage":"same application data as GUI; CREATORX_LIBRARY_DIR overrides CLI storage for tests","output":"JSON: ok/data or ok/error"})
+    ],"entry":{"kind":"prompt|skill","name":"required","prompt":"required for prompt","skillMarkdown":"SKILL.md for skill","category":"empty means unclassified","tags":"string[]","notes":"string","images":"stored image hashes","id":"empty for create","revision":"read before updating"},"limits":{"skillFiles":512,"skillTotalMB":64,"skillFileMB":16},"storage":"same application data as GUI; CREATORX_LIBRARY_DIR overrides CLI storage for tests","output":"JSON: ok/data or ok/error"})
 }
 pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
     if args.is_empty() || ["schema", "--help", "-h"].contains(&args[0].as_str()) {
@@ -60,7 +61,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
         "list" => &["--kind", "--category", "--search"],
         "save" => &["--stdin", "--file", "--if-revision"],
         "import-skill" => &["--folder", "--name", "--category"],
-        "get" | "skill-files" | "categories" => &[],
+        "get" | "skill-files" | "categories" | "clear-categories" => &[],
         "add-category" => &["--name"],
         "import-image" => &["--file"],
         _ => return Err("Unsupported command; use schema".into()),
@@ -182,7 +183,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                     .to_string_lossy()
                     .into_owned()
             });
-            let entry: Entry = serde_json::from_value(json!({"kind":"skill","name":name,"skillMarkdown":markdown,"category":option(args,"--category")?.unwrap_or_else(|| "默认".into())})).map_err(|e| e.to_string())?;
+            let entry: Entry = serde_json::from_value(json!({"kind":"skill","name":name,"skillMarkdown":markdown,"category":option(args,"--category")?.unwrap_or_default()})).map_err(|e| e.to_string())?;
             let files = files
                 .into_iter()
                 .map(|(path, bytes)| ImportFile {
@@ -192,6 +193,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                 .collect();
             serde_json::to_value(store.save(entry, 0, Some(files))?).map_err(|e| e.to_string())
         }
+        "clear-categories" => Ok(json!({"changed": store.clear_categories()?})),
         "categories" => Ok(json!(store.list()?.categories)),
         "add-category" => Ok(json!(
             store.add_category(&option(args, "--name")?.ok_or("Missing --name")?)?

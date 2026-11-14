@@ -1,6 +1,7 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 pub mod cli;
+mod codex;
 mod library;
 
 #[cfg(target_os = "macos")]
@@ -29,13 +30,24 @@ pub fn run() {
             library::library_save,
             library::library_import_image,
             library::library_skill_files,
-            library::library_open_skill_folder
+            library::library_open_skill_folder,
+            library::library_add_category,
+            library::library_move_category,
+            codex::codex_status,
+            codex::creation_list,
+            codex::creation_start,
+            codex::creation_continue,
+            codex::creation_cancel,
+            codex::creation_directory
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             apply_transparent_dock_icon()?;
             app.manage(library::LibraryStore::new(
                 app.path().app_data_dir()?.join("library"),
+            )?);
+            app.manage(codex::CodexEngine::new(
+                app.path().app_data_dir()?.join("creations"),
             )?);
             let chinese = std::env::var("LANG").unwrap_or_default().starts_with("zh");
             let check = MenuItem::with_id(
@@ -73,6 +85,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start CreatorX");
     app.run(|app, event| {
+        if let tauri::RunEvent::Exit = event {
+            app.state::<codex::CodexEngine>().shutdown();
+        }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             if let Some(window) = app.get_webview_window("main") {

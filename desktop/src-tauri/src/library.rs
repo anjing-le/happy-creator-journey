@@ -14,7 +14,7 @@ fn current_schema() -> u32 {
     2
 }
 fn default_category() -> String {
-    "默认".into()
+    String::new()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -207,7 +207,7 @@ impl LibraryStore {
     fn category_names(&self) -> Result<Vec<String>, String> {
         let path = self.root.join("categories.json");
         if !path.exists() {
-            return Ok(vec![default_category()]);
+            return Ok(vec![]);
         }
         let categories: Vec<String> =
             serde_json::from_slice(&fs::read(path).map_err(|_| "无法读取分类")?)
@@ -241,6 +241,99 @@ impl LibraryStore {
         Ok(categories)
     }
 
+    pub fn move_category(&self, id: &str, revision: u64, category: &str) -> Result<Entry, String> {
+        let _guard = self.lock()?;
+        let path = self.entry_path(id)?;
+        let mut entry: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "素材不存在")?)
+            .map_err(|_| "素材记录损坏")?;
+        if entry.revision != revision {
+            return Err("素材已被修改，请刷新后再移动".into());
+        }
+        let category = category.trim();
+        if !category.is_empty() && !self.category_names()?.iter().any(|c| c == category) {
+            return Err("分类不存在，请先新增分类".into());
+        }
+        entry.category = category.into();
+        entry.revision = entry.revision.checked_add(1).ok_or("修订号无效")?;
+        self.atomic_write(
+            &path,
+            &serde_json::to_vec_pretty(&entry).map_err(|_| "无法整理素材")?,
+        )?;
+        self.hydrate_skill(&mut entry)?;
+        Ok(entry)
+    }
+
+    pub fn clear_categories(&self) -> Result<usize, String> {
+        let _guard = self.lock()?;
+        let mut count = 0;
+        for file in fs::read_dir(self.root.join("entries")).map_err(|_| "无法读取素材")? {
+            let path = file.map_err(|_| "无法读取素材")?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let mut entry: Entry =
+                serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取素材")?)
+                    .map_err(|_| "素材记录损坏")?;
+            if !entry.category.is_empty() {
+                entry.category.clear();
+                entry.revision = entry.revision.checked_add(1).ok_or("修订号无效")?;
+                self.atomic_write(
+                    &path,
+                    &serde_json::to_vec_pretty(&entry).map_err(|_| "无法整理素材")?,
+                )?;
+                count += 1;
+            }
+        }
+        self.atomic_write(&self.root.join("categories.json"), b"[]")?;
+        Ok(count)
+    }
+
+    pub fn snapshot_assets(
+        &self,
+        skill_id: &str,
+        prompt_ids: &[String],
+        destination: &std::path::Path,
+    ) -> Result<(Entry, Vec<Entry>), String> {
+        let _guard = self.lock()?;
+        let read = |id: &str| -> Result<Entry, String> {
+            let mut entry: Entry =
+                serde_json::from_slice(&fs::read(self.entry_path(id)?).map_err(|_| "素材不存在")?)
+                    .map_err(|_| "素材记录损坏")?;
+            self.hydrate_skill(&mut entry)?;
+            self.validate(&entry)?;
+            Ok(entry)
+        };
+        let skill = read(skill_id)?;
+        if skill.kind != Kind::Skill {
+            return Err("请选择真实 Skill 文件夹".into());
+        }
+        let folder = destination.join("skill");
+        fs::create_dir_all(&folder).map_err(|_| "无法创建 Skill 快照")?;
+        for (name, bytes) in Self::read_package(&self.root.join("skills").join(skill_id))? {
+            let path = folder.join(name);
+            fs::create_dir_all(path.parent().ok_or("路径无效")?).map_err(|_| "无法创建资源目录")?;
+            self.atomic_write(&path, &bytes)?;
+        }
+        let mut prompts = Vec::new();
+        for id in prompt_ids {
+            let entry = read(id)?;
+            if entry.kind != Kind::Prompt {
+                return Err("附加素材应为提示词".into());
+            }
+            prompts.push(entry);
+        }
+        fs::create_dir_all(destination.join("references")).map_err(|_| "无法创建参考图目录")?;
+        for entry in std::iter::once(&skill).chain(prompts.iter()) {
+            for name in &entry.images {
+                self.atomic_write(
+                    &destination.join("references").join(name),
+                    &fs::read(self.root.join("images").join(name)).map_err(|_| "无法读取参考图")?,
+                )?;
+            }
+        }
+        Ok((skill, prompts))
+    }
+
     pub fn list(&self) -> Result<Library, String> {
         let _guard = self.lock()?;
         let mut entries = Vec::new();
@@ -265,7 +358,7 @@ impl LibraryStore {
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.name.cmp(&b.name)));
         let mut categories = self.category_names()?;
         for entry in &entries {
-            if !categories.contains(&entry.category) {
+            if !entry.category.is_empty() && !categories.contains(&entry.category) {
                 categories.push(entry.category.clone());
             }
         }
@@ -324,9 +417,9 @@ impl LibraryStore {
             for (value, prefix) in std::iter::once((&tx.staged, ".stage-"))
                 .chain(tx.backup.iter().map(|value| (value, ".previous-")))
             {
-                if !value
+                if value
                     .strip_prefix(prefix)
-                    .is_some_and(|s| Uuid::parse_str(s).is_ok())
+                    .is_none_or(|s| Uuid::parse_str(s).is_err())
                 {
                     return Err("Skill 保存日志路径无效".into());
                 }
@@ -641,8 +734,18 @@ impl LibraryStore {
         entry.schema_version = 2;
         entry.name = entry.name.trim().into();
         entry.category = entry.category.trim().into();
-        if entry.category.is_empty() {
-            entry.category = default_category();
+        if !entry.category.is_empty() {
+            let mut categories = self.category_names()?;
+            if !categories.contains(&entry.category) {
+                if categories.len() >= 500 {
+                    return Err("分类数量过多".into());
+                }
+                categories.push(entry.category.clone());
+                self.atomic_write(
+                    &self.root.join("categories.json"),
+                    &serde_json::to_vec_pretty(&categories).map_err(|_| "无法整理分类")?,
+                )?;
+            }
         }
         entry.tags = entry
             .tags
@@ -807,6 +910,36 @@ mod tests {
         }
     }
     #[test]
+    fn categories_clear_and_move_preserve_content_and_reject_stale_drag() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LibraryStore::new(root.path().into()).unwrap();
+        let mut original = entry();
+        original.category = "Old".into();
+        let first = store.save(original, 0, None).unwrap();
+        store.add_category("Empty").unwrap();
+        assert_eq!(store.clear_categories().unwrap(), 1);
+        let cleared = store.list().unwrap();
+        assert!(cleared.categories.is_empty());
+        assert_eq!(cleared.entries.len(), 1);
+        assert_eq!(cleared.entries[0].prompt, first.prompt);
+        assert_eq!(cleared.entries[0].images, first.images);
+        assert!(cleared.entries[0].category.is_empty());
+        store.add_category("New").unwrap();
+        let current = &cleared.entries[0];
+        let moved = store
+            .move_category(&current.id, current.revision, "New")
+            .unwrap();
+        assert_eq!(moved.category, "New");
+        assert_eq!(moved.prompt, first.prompt);
+        assert!(store
+            .move_category(&current.id, current.revision, "")
+            .is_err());
+        assert!(store
+            .move_category(&moved.id, moved.revision, "Unknown")
+            .is_err());
+    }
+
+    #[test]
     fn edits_survive_reopening_and_stale_writes_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(dir.path().into()).unwrap();
@@ -926,4 +1059,21 @@ mod tests {
         bad.id = "../outside".into();
         assert!(store.save(bad, 0, None).is_err());
     }
+}
+
+#[tauri::command]
+pub async fn library_add_category(
+    store: tauri::State<'_, LibraryStore>,
+    name: String,
+) -> Result<Vec<String>, String> {
+    store.add_category(&name)
+}
+#[tauri::command]
+pub async fn library_move_category(
+    store: tauri::State<'_, LibraryStore>,
+    id: String,
+    revision: u64,
+    category: String,
+) -> Result<Entry, String> {
+    store.move_category(&id, revision, &category)
 }

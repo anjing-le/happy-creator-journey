@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
-import { isTauri } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { check, type Update } from '@tauri-apps/plugin-updater';
@@ -75,6 +75,9 @@ export function App() {
     if (document.querySelector('[data-editing]')) {
       setMessage(zh ? '请先保存或退出素材编辑，再更新客户端。' : 'Save or leave the asset editor before updating.');
       setPhase('error'); return;
+    }
+    if (native) {
+      try { const jobs = await invoke<{ status: string }[]>('creation_list'); if (jobs.some(job => ['starting', 'running'].includes(job.status))) { setMessage(zh ? '请先完成或停止正在进行的创作，再更新客户端。' : 'Finish or stop active creation tasks before updating.'); setPhase('error'); return; } } catch { setMessage(zh ? '无法确认创作任务状态，请稍后更新。' : 'Unable to verify active tasks. Try updating later.'); setPhase('error'); return; }
     }
     const candidate = update.current;
     if (!candidate || installing.current) return;

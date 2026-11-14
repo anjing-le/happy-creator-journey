@@ -10,10 +10,10 @@ export interface AssetEntry {
 }
 export interface AssetLibrary { entries: AssetEntry[]; imageDirectory: string; categories: string[] }
 export function emptyEntry(kind: AssetKind): AssetEntry {
-  return { schemaVersion: 2, id: '', kind, name: '', prompt: '', skillMarkdown: '', skillDigest: null, images: [], revision: 0, updatedAt: 0, category: '默认', tags: [], notes: '' };
+  return { schemaVersion: 2, id: '', kind, name: '', prompt: '', skillMarkdown: '', skillDigest: null, images: [], revision: 0, updatedAt: 0, category: '', tags: [], notes: '' };
 }
 export function loadLibrary(): Promise<AssetLibrary> {
-  if (!isTauri()) return Promise.resolve({ entries: [], imageDirectory: '', categories: ['默认'] });
+  if (!isTauri()) return Promise.resolve({ entries: [], imageDirectory: '', categories: [] });
   return invoke('library_list');
 }
 export function saveEntry(entry: AssetEntry, files?: SkillFile[]): Promise<AssetEntry> {
@@ -51,3 +51,6 @@ export async function readSkillFolder(files: FileList): Promise<{ name: string; 
 }
 export function skillFiles(id: string): Promise<string[]> { return invoke('library_skill_files', { id }); }
 export function openSkillFolder(id: string): Promise<void> { return invoke('library_open_skill_folder', { id }); }
+
+export function addCategory(name: string): Promise<string[]> { return invoke('library_add_category', { name }); }
+export function moveCategory(entry: AssetEntry, category: string): Promise<AssetEntry> { return invoke('library_move_category', { id: entry.id, revision: entry.revision, category }); }
