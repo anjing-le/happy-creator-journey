@@ -21,7 +21,7 @@ uv run --with pillow==13.0.0 python desktop/scripts/verify-icon-alpha.py --bundl
 | --- | --- |
 | 透明母图与多尺寸资源 | 已通过 Alpha 检查，主体内部 840591 个像素使用原图 RGB。 |
 | Rust 编译与原素材保存测试 | 已通过。 |
-| 安装包与已安装应用 | 待安装后核对。 |
+| 安装包与已安装应用 | 本机 0.0.7 已安装；ICNS 与源码一致，运行时 PNG 原字节存在于可执行文件，Alpha 检查通过。 |
 | macOS 运行中的 Dock | 自动化读取 Dock 超时，待实际显示核对。 |
 | 退出后的启动入口与访达 | 待实际显示核对。 |
 | Windows 实机 | 当前无 Windows 桌面可用；ICO 透明度及跨平台构建与实际系统显示分别记录。 |

@@ -51,7 +51,7 @@ Skill 根目录必须有 UTF-8 `SKILL.md`。其余脚本、参考资料和图片
 
 ## 从 Hub 迁入
 
-`scripts/import-hub.py` 接收私有 API 导出目录（`items.json` 和 `categories.json`），通过 CLI 导入提示词、分类和参考图。保留正文、名称、来源及原始时间；以 Hub ID 生成稳定标识。重复执行不重复导入，遇到本地已修改的条目报告冲突，不覆盖。
+`scripts/import-hub.py` 接收私有 API 导出目录（`items.json` 和 `categories.json`），通过 CLI 导入提示词、分类和参考图。保留正文、名称、来源及原始时间；以 Hub ID 生成稳定标识。重复执行不重复导入，正文、名称、分类或参考图与源导出不同时报告冲突，不覆盖；本地标签与备注保留。
 
 ```sh
 python3 desktop/scripts/import-hub.py --client /path/to/creatorx --snapshot /private/hub-export
