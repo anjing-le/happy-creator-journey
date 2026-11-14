@@ -38,6 +38,7 @@ pub fn run() {
             codex::creation_start,
             codex::creation_continue,
             codex::creation_cancel,
+            codex::creation_open_file,
             codex::creation_directory
         ])
         .setup(|app| {

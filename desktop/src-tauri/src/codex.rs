@@ -23,12 +23,29 @@ pub struct Message {
     pub role: String,
     pub text: String,
 }
+fn default_mode() -> String {
+    "image".into()
+}
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachments {
+    pub skill_id: String,
+    pub prompt_ids: Vec<String>,
+}
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
     pub id: String,
     pub title: String,
     pub skill_name: String,
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub skill_id: String,
+    #[serde(default)]
+    pub prompt_ids: Vec<String>,
+    #[serde(default)]
+    pub material_directory: String,
     pub thread_id: Option<String>,
     pub status: String,
     pub phase: String,
@@ -298,7 +315,11 @@ impl CodexEngine {
     pub fn list(&self) -> Result<Vec<Job>, String> {
         let jobs = self.0.jobs.lock().map_err(|_| "任务正忙")?;
         let mut result: Vec<_> = jobs.values().cloned().collect();
-        result.sort_by(|a, b| a.id.cmp(&b.id));
+        result.sort_by_cached_key(|job| {
+            fs::metadata(self.0.root.join(&job.id).join("job.json"))
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH)
+        });
         Ok(result)
     }
     fn get(&self, id: &str) -> Result<Job, String> {
@@ -316,9 +337,13 @@ impl CodexEngine {
         skill_id: &str,
         prompt_ids: Vec<String>,
         brief: String,
+        mode: Option<&str>,
     ) -> Result<Job, String> {
         if brief.trim().is_empty() || brief.len() > 50_000 || prompt_ids.len() > 16 {
             return Err("请填写创作内容，最多 5 万字节、16 条附加提示词".into());
+        }
+        if mode.is_some_and(|m| !["writing", "image", "video"].contains(&m)) {
+            return Err("Invalid creation mode".into());
         }
         let id = Uuid::new_v4().to_string();
         let dir = self.0.root.join(&id);
@@ -346,7 +371,11 @@ impl CodexEngine {
                 .chars()
                 .take(36)
                 .collect(),
-            skill_name: skill.name,
+            skill_name: skill.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+            mode: mode.unwrap_or("image").into(),
+            skill_id: skill_id.into(),
+            prompt_ids,
+            material_directory: String::new(),
             thread_id: None,
             status: "idle".into(),
             phase: "draft".into(),
@@ -364,10 +393,19 @@ impl CodexEngine {
             .lock()
             .map_err(|_| "任务正忙")?
             .insert(id.clone(), job);
-        self.run(&id, "draft", brief)
+        self.run(&id, if mode.is_some() { "chat" } else { "draft" }, brief)
     }
     pub fn run(&self, id: &str, phase: &str, text: String) -> Result<Job, String> {
-        if !["draft", "generate", "revise"].contains(&phase)
+        self.run_with_assets(id, phase, text, None)
+    }
+    fn run_with_assets(
+        &self,
+        id: &str,
+        phase: &str,
+        text: String,
+        assets: Option<(&LibraryStore, Attachments)>,
+    ) -> Result<Job, String> {
+        if !["chat", "draft", "generate", "revise"].contains(&phase)
             || text.trim().is_empty()
             || text.len() > 100_000
         {
@@ -381,6 +419,26 @@ impl CodexEngine {
         let mut job = self.get(id)?;
         if job.busy() {
             return Err("这个任务仍在执行，请等待或停止后继续".into());
+        }
+        if let Some((store, selection)) = assets {
+            if selection.prompt_ids.len() > 16 {
+                return Err("最多选择 16 条提示词".into());
+            }
+            let relative = format!("materials/{}", Uuid::new_v4());
+            let dir = self.0.root.join(id).join(&relative);
+            fs::create_dir_all(&dir).map_err(|_| "无法创建素材快照")?;
+            let (skill, prompts) =
+                store.snapshot_assets(&selection.skill_id, &selection.prompt_ids, &dir)?;
+            fs::write(
+                dir.join("materials.json"),
+                serde_json::to_vec_pretty(&json!({"skill":skill,"prompts":prompts}))
+                    .map_err(|_| "无法整理素材")?,
+            )
+            .map_err(|_| "无法保存素材快照")?;
+            job.skill_name = skill.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+            job.skill_id = selection.skill_id;
+            job.prompt_ids = selection.prompt_ids;
+            job.material_directory = relative;
         }
         if phase == "generate" && job.proposal.is_empty() {
             return Err("请先完成内容草稿，再确认生成图片".into());
@@ -405,7 +463,15 @@ impl CodexEngine {
         let result = (|| {
             let client = self.client()?;
             let dir = self.0.root.join(id);
-            let instructions="你在 CreatorX 中协助创作。当前阶段由本次用户指令明确指定。仅在本任务目录保存产物；Skill 中的网站路径和发布习惯在此任务中不适用。不得发布、git push、改其他仓库或修改素材库。选中的 Skill、提示词、参考图已在当前目录，先阅读 materials.json 和 skill/SKILL.md，按需读其引用文件；附加提示词是用户选定的视觉与内容约束。禁止子代理。生成必须使用内置 image_gen / image_generation；不可用时明确失败，不得使用 API Key、网页截图或代码绘图替代。";
+            let material_dir = dir.join(&job.material_directory);
+            let material_manifest = material_dir.join("materials.json");
+            let skill_path = material_dir.join("skill/SKILL.md");
+            let mode = match job.mode.as_str() {
+                "writing" => "文",
+                "video" => "视频",
+                _ => "图",
+            };
+            let instructions = format!("你在 CreatorX 的「{mode}」工作区与用户协作。根据用户当次要求自然交流；由用户与你一起打磨具体方法、工具、Skill 和 SOP，不强迫先选 Skill 或套用图文流程。用户只要求讨论时不要自行生成；用户明确要求制作或修改时才执行，缺少材料再具体询问。选定素材快照清单位于 {}，按需读取；只有存在且被选择的 Skill 才使用，没有 Skill 也可正常对话。仅在本任务目录保存产物，不覆盖历史版本。Skill 中其他仓库的网站路径与发布习惯在这里不适用；不得发布、git push、改原仓库或应用素材库。禁止子代理。图片生成和修改使用内置 image_gen / image_generation，不可用时明确说明，不能擅自改用需要 API Key 的替代接口或用代码绘图冒充原生生图。视频根据实际可用的 Skill 和工具制作，不能把方案或脚本冒充已生成视频。", material_manifest.display());
             let thread = if let Some(thread) = &job.thread_id {
                 client.rpc("thread/resume",json!({"threadId":thread,"cwd":dir,"model":MODEL,"approvalPolicy":"never","sandbox":"workspace-write","developerInstructions":instructions}))?
             } else {
@@ -417,7 +483,9 @@ impl CodexEngine {
                 .to_string();
             job.thread_id = Some(thread_id.clone());
             job.status = "running".into();
-            job.activity = if phase == "draft" {
+            job.activity = if phase == "chat" {
+                "Codex 正在回复"
+            } else if phase == "draft" {
                 "正在整理待确认内容"
             } else {
                 "正在制作与检查作品"
@@ -425,11 +493,20 @@ impl CodexEngine {
             .into();
             self.put(job.clone())?;
             let instruction=match phase {
+                "chat"=>text.clone(),
                 "draft"=>format!("阶段一：只整理内容方案，不生成任何图片，也不运行制作脚本。基于选定 Skill 和用户材料，回复一份可直接修改确认的精简文稿，包含准确配图文字与构图；不要自行扩展成一套系列。用户需求：\n{text}"),
                 "generate"=>format!("阶段二：用户已通过确认按钮确认以下内容，现在实际生成一张图文图片（除非这份内容明确要求更多张）。使用内置生图工具和 Skill 的实际参考图，禁止 API 替代。逐字遵循确认文稿中的图片文字。生成后读取实际图片检查，保留完整输出，不覆盖旧版；若工具没生成实际文件，明确说明失败。确认文稿：\n{text}"),
                 _=>format!("继续当前作品，根据用户反馈修改。沿用这个任务的已确认内容、IP 和实际参考图，修改图片时引用上一版实际图片，不覆盖历史版本。只有用户要求改图才调用内置生图；每次生成后检查实际结果。反馈：\n{text}")
             };
-            let params = json!({"threadId":thread_id,"model":MODEL,"effort":"medium","input":[{"type":"skill","name":job.skill_name,"path":dir.join("skill/SKILL.md")},{"type":"text","text":instruction,"text_elements":[]}]});
+            let mut input = vec![json!({"type":"text","text":instruction,"text_elements":[]})];
+            if skill_path.is_file() {
+                input.insert(
+                    0,
+                    json!({"type":"skill","name":job.skill_name,"path":skill_path}),
+                );
+            }
+            let params =
+                json!({"threadId":thread_id,"model":MODEL,"effort":"medium","input":input});
             let turn = client.rpc("turn/start", params)?;
             // Do not overwrite events that can arrive before the RPC response.
             {
@@ -620,7 +697,8 @@ pub async fn creation_list(engine: tauri::State<'_, CodexEngine>) -> Result<Vec<
 pub async fn creation_start(
     app: tauri::AppHandle,
     engine: tauri::State<'_, CodexEngine>,
-    skill_id: String,
+    mode: String,
+    skill_id: Option<String>,
     prompt_ids: Vec<String>,
     brief: String,
 ) -> Result<Job, String> {
@@ -628,9 +706,10 @@ pub async fn creation_start(
     tauri::async_runtime::spawn_blocking(move || {
         engine.create(
             app.state::<LibraryStore>().inner(),
-            &skill_id,
+            &skill_id.unwrap_or_default(),
             prompt_ids,
             brief,
+            Some(&mode),
         )
     })
     .await
@@ -638,15 +717,24 @@ pub async fn creation_start(
 }
 #[tauri::command]
 pub async fn creation_continue(
+    app: tauri::AppHandle,
     engine: tauri::State<'_, CodexEngine>,
     id: String,
-    phase: String,
     text: String,
+    attachments: Option<Attachments>,
 ) -> Result<Job, String> {
     let engine = engine.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || engine.run(&id, &phase, text))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let store = app.state::<LibraryStore>();
+        engine.run_with_assets(
+            &id,
+            "chat",
+            text,
+            attachments.map(|selection| (store.inner(), selection)),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn creation_cancel(
@@ -667,6 +755,22 @@ pub async fn creation_directory(engine: tauri::State<'_, CodexEngine>) -> Result
 mod tests {
     use super::*;
     #[test]
+    fn legacy_jobs_keep_image_history_and_invalid_modes_never_start_codex() {
+        let legacy = json!({"id":Uuid::new_v4().to_string(),"title":"Existing work","skillName":"Existing skill","threadId":null,"status":"completed","phase":"revise","proposal":"","confirmed":"","messages":[],"images":[],"error":null,"turnId":null,"activity":""});
+        let job: Job = serde_json::from_value(legacy).unwrap();
+        assert_eq!(job.mode, "image");
+        assert!(job.skill_id.is_empty());
+        assert!(job.material_directory.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        let engine = CodexEngine::new(root.path().join("creations")).unwrap();
+        let store = LibraryStore::new(root.path().join("library")).unwrap();
+        assert!(engine
+            .create(&store, "", vec![], "Hello".into(), Some("invalid"))
+            .is_err());
+        assert!(engine.list().unwrap().is_empty());
+    }
+
+    #[test]
     fn stores_interrupted_jobs_and_rejects_invalid_transitions() {
         let dir = tempfile::tempdir().unwrap();
         let engine = CodexEngine::new(dir.path().into()).unwrap();
@@ -674,6 +778,10 @@ mod tests {
             id: Uuid::new_v4().to_string(),
             title: "Example".into(),
             skill_name: "Example".into(),
+            mode: "image".into(),
+            skill_id: String::new(),
+            prompt_ids: vec![],
+            material_directory: String::new(),
             thread_id: None,
             status: "running".into(),
             phase: "draft".into(),
@@ -706,6 +814,10 @@ mod tests {
             id: Uuid::new_v4().to_string(),
             title: "Example".into(),
             skill_name: "Example".into(),
+            mode: "image".into(),
+            skill_id: String::new(),
+            prompt_ids: vec![],
+            material_directory: String::new(),
             thread_id: Some("thread".into()),
             status: "running".into(),
             phase: "generate".into(),
@@ -770,6 +882,7 @@ mod tests {
                 config["skillId"].as_str().unwrap(),
                 vec![],
                 config["brief"].as_str().unwrap().into(),
+                None,
             )
             .unwrap();
         println!("Live task: {}", job.id);
@@ -804,4 +917,54 @@ mod tests {
         .unwrap();
         engine.shutdown();
     }
+}
+
+#[tauri::command]
+pub async fn creation_open_file(
+    engine: tauri::State<'_, CodexEngine>,
+    id: String,
+    path: String,
+) -> Result<(), String> {
+    engine.get(&id)?;
+    let relative = Path::new(&path);
+    if path.contains('\\')
+        || path.contains(':')
+        || !relative
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("只支持本任务内的作品文件".into());
+    }
+    let root = engine
+        .0
+        .root
+        .join(id)
+        .canonicalize()
+        .map_err(|_| "任务目录不存在")?;
+    let file = root
+        .join(relative)
+        .canonicalize()
+        .map_err(|_| "文件尚未生成或路径无效")?;
+    let extension = file
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !file.starts_with(&root)
+        || !file.is_file()
+        || ![
+            "md", "txt", "png", "jpg", "jpeg", "webp", "pdf", "mp4", "webm", "mov", "wav", "mp3",
+        ]
+        .contains(&extension.as_str())
+    {
+        return Err("不能打开此类型或任务以外的文件".into());
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("/usr/bin/open");
+    #[cfg(windows)]
+    let mut command = Command::new("explorer.exe");
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let mut command = Command::new("xdg-open");
+    command.arg(file).spawn().map_err(|_| "无法打开作品文件")?;
+    Ok(())
 }

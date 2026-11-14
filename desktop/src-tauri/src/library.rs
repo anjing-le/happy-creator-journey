@@ -293,7 +293,7 @@ impl LibraryStore {
         skill_id: &str,
         prompt_ids: &[String],
         destination: &std::path::Path,
-    ) -> Result<(Entry, Vec<Entry>), String> {
+    ) -> Result<(Option<Entry>, Vec<Entry>), String> {
         let _guard = self.lock()?;
         let read = |id: &str| -> Result<Entry, String> {
             let mut entry: Entry =
@@ -303,17 +303,23 @@ impl LibraryStore {
             self.validate(&entry)?;
             Ok(entry)
         };
-        let skill = read(skill_id)?;
-        if skill.kind != Kind::Skill {
-            return Err("请选择真实 Skill 文件夹".into());
-        }
-        let folder = destination.join("skill");
-        fs::create_dir_all(&folder).map_err(|_| "无法创建 Skill 快照")?;
-        for (name, bytes) in Self::read_package(&self.root.join("skills").join(skill_id))? {
-            let path = folder.join(name);
-            fs::create_dir_all(path.parent().ok_or("路径无效")?).map_err(|_| "无法创建资源目录")?;
-            self.atomic_write(&path, &bytes)?;
-        }
+        let skill = if skill_id.is_empty() {
+            None
+        } else {
+            let entry = read(skill_id)?;
+            if entry.kind != Kind::Skill {
+                return Err("请选择真实 Skill 文件夹".into());
+            }
+            let folder = destination.join("skill");
+            fs::create_dir_all(&folder).map_err(|_| "无法创建 Skill 快照")?;
+            for (name, bytes) in Self::read_package(&self.root.join("skills").join(skill_id))? {
+                let path = folder.join(name);
+                fs::create_dir_all(path.parent().ok_or("路径无效")?)
+                    .map_err(|_| "无法创建资源目录")?;
+                self.atomic_write(&path, &bytes)?;
+            }
+            Some(entry)
+        };
         let mut prompts = Vec::new();
         for id in prompt_ids {
             let entry = read(id)?;
@@ -323,7 +329,7 @@ impl LibraryStore {
             prompts.push(entry);
         }
         fs::create_dir_all(destination.join("references")).map_err(|_| "无法创建参考图目录")?;
-        for entry in std::iter::once(&skill).chain(prompts.iter()) {
+        for entry in skill.iter().chain(prompts.iter()) {
             for name in &entry.images {
                 self.atomic_write(
                     &destination.join("references").join(name),
@@ -909,6 +915,25 @@ mod tests {
             source: None,
         }
     }
+    #[test]
+    fn material_snapshot_allows_no_skill_and_preserves_selected_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LibraryStore::new(root.path().join("library")).unwrap();
+        let saved = store.save(entry(), 0, None).unwrap();
+        let target = root.path().join("snapshot");
+        let (skill, prompts) = store
+            .snapshot_assets("", std::slice::from_ref(&saved.id), &target)
+            .unwrap();
+        assert!(skill.is_none());
+        assert!(!target.join("skill").exists());
+        assert_eq!(prompts[0].prompt, saved.prompt);
+        let (skill, prompts) = store
+            .snapshot_assets("", &[], &root.path().join("empty"))
+            .unwrap();
+        assert!(skill.is_none());
+        assert!(prompts.is_empty());
+    }
+
     #[test]
     fn categories_clear_and_move_preserve_content_and_reject_stale_drag() {
         let root = tempfile::tempdir().unwrap();

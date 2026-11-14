@@ -1,6 +1,6 @@
 {
   "name": "creatorx",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,7 +17,8 @@
     "@tauri-apps/plugin-process": "2.4.0",
     "@tauri-apps/plugin-updater": "2.13.1",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.1",
