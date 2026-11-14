@@ -60,7 +60,7 @@ OTA 沿用 macos-x 的使用习惯：**安静检查 → 有新版提示 → 用�
 
 ## 5. 当前进度｜已核对
 
-当前公开版本为 **0.0.8**，本机已安装。第一条图文流程与分类交互已实测，三平台安装包与更新签名验证通过。
+当前公开版本为 **0.0.9**，本机已安装。三个入口的无 Skill 对话、中途添加 Skill、旧作品与素材库精简布局均已实测，三平台安装包与更新签名验证通过。
 
 | 项目 | 实际状态 |
 | --- | --- |
@@ -69,14 +69,14 @@ OTA 沿用 macos-x 的使用习惯：**安静检查 → 有新版提示 → 用�
 | 素材库 | 提示词／Skills；支持新增分类、拖拽换分类。旧分类保持为空，素材保留为未分类；去除引号装饰、自动用途标签和筛选。 |
 | 本机素材 | 保留从 Hub 迁入的 41 条提示词和 16 张参考图；导入完整安静金融图文 Skill。私人数据不随安装包公开，原 Hub 未改动。 |
 | 本地保存与 CLI | 本机安装版 CLI 已验证；双平台自动测试覆盖进程间冲突、图片原字节、Skill 资源保留、外部文档修改与中断恢复。Windows 发布版 CLI 检查通过。 |
-| macOS 安装与 OTA | 0.0.8 本地构建安装并启动，实际核对两版作品、Codex 续写、新增分类与拖拽移动；此前 OTA 自动重启窗口连接异常仍待排查，本次未重复 OTA 验收。 |
+| macOS 安装与 OTA | 0.0.9 本地构建安装并启动，实际核对三个独立对话入口、中途添加 Skill 与旧图片兼容；此前 OTA 自动重启窗口连接异常仍待排查，本次未重复 OTA 验收。 |
 | 更新签名 | CI 验证三平台包与签名；此前已验证损坏包和篡改签名被拒绝。 |
 | 跨平台构建 | macOS／Windows 检查通过，Apple Silicon、Intel Mac、Windows x64 安装包已发布。 |
 | 图文创作 | 本机真实后端已跑通文稿、原生出图与同会话改图，保留两张原图；安装版已核对图片展示及继续对话，任务与素材快照保存在本地。 |
 | 待完善能力 | 更多 Skill 的运行依赖、任务管理、视频渲染与 Windows 原生 Codex 真机验证。 |
 | 对外分发完善 | Windows 真机交互尚未验收；Apple 公证和 Windows 代码签名尚未配置。 |
 
-依据：[0.0.8 发布](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.8)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43617106501)、[三平台构建、CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43617109128)。
+依据：[0.0.9 发布](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.9)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43621180629)、[三平台构建、CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43621184205)。
 
 ## 6. 后续推进｜从素材库开始
 

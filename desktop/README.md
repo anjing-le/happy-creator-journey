@@ -34,6 +34,6 @@ OTA 保持独立签名、用户确认后下载验签；更新签名不等于 App
 
 本机真实后端试跑已通过“文稿 → 原生出图 → 同会话改图”，保留两张实际图片。安装版已核对两版图片展示、重启后的同任务继续对话、新增空分类和拖拽移动；临时测试分类已清理，当前 42 份素材全部未分类。`codex.rs` 中的真实服务测试默认忽略；只有显式提供私有 `CREATORX_LIVE_CASE` 才运行，CI 不调用付费模型。普通测试覆盖任务恢复、未确认内容拦截、缺少实际图片时报告失败、分类移动的修订冲突及清空分类保留正文。
 
-[0.0.8 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.8)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43617106501)、[三平台构建、Windows 发布版 CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43617109128)均已完成。Windows 原生 Codex 连接、桌面交互与图标仍需真机验证；本轮本地安装不能代替 OTA 自动重启验收。
+[0.0.9 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.9)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43621180629)、[三平台构建、Windows 发布版 CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43621184205)均已完成。Windows 原生 Codex 连接、桌面交互与图标仍需真机验证；本轮本地安装不能代替 OTA 自动重启验收。
 
-0.0.9 新增无 Skill 对话、三入口历史分离、可选素材切换和 Markdown 回复展示；空闲时停止轮询，仅执行中或切回窗口时刷新。视频入口已接入 Codex 对话，不代表已实现固定的视频生成或渲染后端。
+0.0.9 已在安装版实测文、图、视频三个入口不选择 Skill 的真实回复，以及聊天中添加 Skill 后读取其实际名称；重启恢复选择，旧任务的两张图片正常显示。联调会话已从客户端移出、对应 Codex 测试会话已归档。支持可选素材切换和 Markdown 回复展示；空闲时停止轮询，仅执行中或切回窗口时刷新。视频入口已接入 Codex 对话，不代表已实现固定的视频生成或渲染后端。
