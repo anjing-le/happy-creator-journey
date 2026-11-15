@@ -21,6 +21,34 @@ fn apply_transparent_dock_icon() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn hide_macos_window_controls(
+    window: &tauri::WebviewWindow,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+
+    let _main_thread = MainThreadMarker::new().ok_or("Window controls require the main thread")?;
+    let pointer = window.ns_window()?;
+    if pointer.is_null() {
+        return Err("Missing native window".into());
+    }
+    // Tauri owns this NSWindow for the duration of the main-thread call.
+    // Hide the controls without changing the closable/resizable window style,
+    // so the native Command+W menu action and existing hide/reopen flow still work.
+    let native = unsafe { &*pointer.cast::<NSWindow>() };
+    for kind in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(button) = native.standardWindowButton(kind) {
+            button.setHidden(true);
+        }
+    }
+    Ok(())
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -43,7 +71,12 @@ pub fn run() {
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
-            apply_transparent_dock_icon()?;
+            {
+                apply_transparent_dock_icon()?;
+                if let Some(window) = app.get_webview_window("main") {
+                    hide_macos_window_controls(&window)?;
+                }
+            }
             app.manage(library::LibraryStore::new(
                 app.path().app_data_dir()?.join("library"),
             )?);
@@ -92,6 +125,9 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
             if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = hide_macos_window_controls(&window) {
+                    eprintln!("Unable to hide window controls: {error}");
+                }
                 let _ = window.show();
                 let _ = window.set_focus();
             }

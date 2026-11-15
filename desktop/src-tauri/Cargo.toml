@@ -1,6 +1,6 @@
 [package]
 name = "creatorx"
-version = "0.0.13"
+version = "0.0.14"
 description = "Anjing CreatorX desktop workspace"
 edition = "2021"
 rust-version = "1.90"
@@ -27,5 +27,5 @@ tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSImage"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSImage", "NSWindow", "NSButton", "NSControl", "NSView"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSData"] }
