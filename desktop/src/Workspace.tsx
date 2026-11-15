@@ -40,7 +40,7 @@ export function Workspace() {
       <div className="creation-entries">{entrances.map(({ name, image }) => <button key={name} className={`entry-card entrance-${image}`} aria-label={name} onClick={() => navigate({ page: 'creation', name })}>
         <span className="entrance-art"><img src={`/entrances/${image}-v2.png`} alt="" draggable={false} /></span>
       </button>)}</div>
-      <button className="library-entry" aria-label="素材库" onClick={() => navigate({ page: 'library' })}>
+      <button className="library-entry home-library-shortcut" aria-label="素材库" onClick={() => navigate({ page: 'library' })}>
         <img src="/entrances/library-v2.png" alt="" draggable={false} />
       </button>
     </div>
