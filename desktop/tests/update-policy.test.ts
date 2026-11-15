@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CHECK_INTERVAL, downloadPercent, shouldCheckAtStartup } from '../src/update-policy.ts';
+import { CHECK_INTERVAL, downloadPercent, shouldCheckAtStartup, nextBackgroundCheckDelay } from '../src/update-policy.ts';
 test('startup checks are throttled while bad or future timestamps recover', () => {
   const now = 10 * CHECK_INTERVAL;
   assert.equal(shouldCheckAtStartup(null, now), true);
@@ -14,4 +14,15 @@ test('unknown-length downloads remain indeterminate and progress stays bounded',
   assert.equal(downloadPercent(50, 100), 50);
   assert.equal(downloadPercent(110, 100), 100);
   assert.equal(downloadPercent(-10, 100), 0);
+});
+
+test('background checks resume when due and failed attempts back off until relaunch', () => {
+  const now = 10 * CHECK_INTERVAL;
+  assert.equal(nextBackgroundCheckDelay(null, 0, now), 0);
+  assert.equal(nextBackgroundCheckDelay(String(now - CHECK_INTERVAL / 2), 0, now), CHECK_INTERVAL / 2);
+  assert.equal(nextBackgroundCheckDelay(String(now - CHECK_INTERVAL), 0, now), 0);
+  assert.equal(nextBackgroundCheckDelay(null, now, now), CHECK_INTERVAL);
+  assert.equal(nextBackgroundCheckDelay(null, now - CHECK_INTERVAL, now), 0);
+  for (const corrupt of ['bad', String(now + 1)]) assert.equal(nextBackgroundCheckDelay(corrupt, now + 1, now), 0);
+  assert.equal(nextBackgroundCheckDelay(null, 0, now), 0, 'a new process retries the previous failed check');
 });

@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
-import { downloadPercent, shouldCheckAtStartup } from './update-policy';
+import { downloadPercent, nextBackgroundCheckDelay } from './update-policy';
 import { Workspace } from './Workspace';
 
 type Phase = 'idle' | 'checking' | 'available' | 'current' | 'installing' | 'restart' | 'error';
@@ -39,6 +39,7 @@ export function App() {
   const [message, setMessage] = useState('');
   const update = useRef<Update | null>(null);
   const checking = useRef(false);
+  const lastAttempt = useRef(0);
   const installing = useRef(false);
   const modal = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -50,6 +51,7 @@ export function App() {
     if (update.current) { setPhase('available'); return; }
     if (!native) { setPhase('error'); setMessage(copy.preview); return; }
     checking.current = true;
+    lastAttempt.current = Date.now();
     setPhase('checking');
     try {
       const result = await check({ timeout: 20_000 });
@@ -117,8 +119,23 @@ export function App() {
       // Closing a macOS window keeps the app available from its Dock icon.
       if (navigator.userAgent.includes('Mac')) { event.preventDefault(); await getCurrentWindow().hide(); }
     });
-    if (shouldCheckAtStartup(localStorage.getItem('creatorx.last-update-check'))) void checkAction.current(false);
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const delay = () => nextBackgroundCheckDelay(localStorage.getItem('creatorx.last-update-check'), lastAttempt.current);
+    const tick = async () => {
+      if (timer) clearTimeout(timer);
+      if (stopped || update.current || installing.current) return;
+      if (!checking.current && delay() === 0) await checkAction.current(false);
+      if (!stopped && !update.current && !installing.current) timer = setTimeout(() => { void tick(); }, Math.max(1000, delay()));
+    };
+    const resume = () => { if (delay() === 0) void tick(); };
+    const visible = () => { if (document.visibilityState === 'visible') resume(); };
+    void tick();
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', visible);
     return () => {
+      stopped = true; if (timer) clearTimeout(timer);
+      window.removeEventListener('focus', resume); document.removeEventListener('visibilitychange', visible);
       void stop.then(unlisten => unlisten()); void stopClose.then(unlisten => unlisten());
       void update.current?.close();
     };
@@ -145,7 +162,7 @@ export function App() {
   return <main className="workspace" aria-label="CreatorX">
     <div className="drag-region" data-tauri-drag-region />
     <Workspace />
-    <button ref={trigger} className={`update-trigger ${phase === 'available' ? 'has-update' : ''}`} aria-label={copy.updates} onClick={() => { void checkUpdates(true); }}><Arrow /></button>
+    {update.current !== null && <button ref={trigger} className="update-trigger has-update" aria-label={copy.available} onClick={() => { void checkUpdates(true); }}><Arrow /></button>}
     {open && <div className="scrim" onMouseDown={event => { if (event.target === event.currentTarget) dismiss(); }}>
       <div ref={modal} className="update-panel" role="dialog" aria-modal="true" aria-labelledby="update-title" tabIndex={-1}>
         {!busy && phase !== 'restart' && <button className="dismiss" onClick={dismiss} aria-label={copy.close}>×</button>}
