@@ -1,6 +1,6 @@
 # CreatorX
 
-当前 **0.0.13**：文、图、视频分别进入 Codex 对话，固定 `gpt-6.1-sol`／`medium`，各自保存历史。打开后可直接交流，无需先选 Skill；聊天中可添加或更换 Skill、IP 提示词，按请求制作与修改。具体方法由实践逐步打磨。素材库的返回、提示词／Skills 在同一行；搜索和加号同一行，去除重复标题、引号装饰、用途标签和筛选。
+当前 **0.0.14**：文、图、视频分别进入 Codex 对话，固定 `gpt-6.1-sol`／`medium`，各自保存历史。打开后可直接交流，无需先选 Skill；聊天中可添加或更换 Skill、IP 提示词，按请求制作与修改。具体方法由实践逐步打磨。素材库的返回、提示词／Skills 在同一行；搜索和加号同一行，去除重复标题、引号装饰、用途标签和筛选。
 
 ```sh
 cd desktop
@@ -36,7 +36,7 @@ OTA 约每小时后台检查，唤醒或切回窗口时补查已到期任务。�
 
 本机真实后端试跑已通过“文稿 → 原生出图 → 同会话改图”，保留两张实际图片。安装版已核对两版图片展示、重启后的同任务继续对话、新增空分类和拖拽移动；临时测试分类已清理，当前 42 份素材全部未分类。`codex.rs` 中的真实服务测试默认忽略；只有显式提供私有 `CREATORX_LIVE_CASE` 才运行，CI 不调用付费模型。普通测试覆盖任务恢复、未确认内容拦截、缺少实际图片时报告失败、分类移动的修订冲突及清空分类保留正文。
 
-[0.0.13 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.13)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43724347925)、[三平台构建、Windows 发布版 CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43723839766)均已完成。Windows 原生 Codex 连接、桌面交互与图标仍需真机验证；本轮本地安装不能代替 OTA 自动重启验收。
+[0.0.14 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.14)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/43729458988)、[三平台构建、Windows 发布版 CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/43729461171)均已完成。Windows 原生 Codex 连接、桌面交互与图标仍需真机验证；本轮本地安装不能代替 OTA 自动重启验收。
 
 0.0.9 已在安装版实测文、图、视频三个入口不选择 Skill 的真实回复，以及聊天中添加 Skill 后读取其实际名称；重启恢复选择，旧任务的两张图片正常显示。联调会话已从客户端移出、对应 Codex 测试会话已归档。支持可选素材切换和 Markdown 回复展示；空闲时停止轮询，仅执行中或切回窗口时刷新。视频入口已接入 Codex 对话，不代表已实现固定的视频生成或渲染后端。
 
