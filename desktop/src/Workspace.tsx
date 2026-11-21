@@ -1,10 +1,10 @@
 import { Choice } from './Choice';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
+import { initialNavigation, navigationKey, navigationMouse, navigationReducer, type Route } from './navigation';
 import { Creation } from './Creation';
 import { isTauri } from '@tauri-apps/api/core';
 import { AssetLibrary, AssetEntry, AssetKind, emptyEntry, imageUrl, importImage, loadLibrary, saveEntry, SkillFile, readSkillFolder, skillFiles, openSkillFolder, addCategory, moveCategory } from './library';
 
-type Route = { page: 'home' } | { page: 'library' } | { page: 'creation'; name: string };
 const HOME: Route = { page: 'home' };
 const native = isTauri();
 const entrances = [
@@ -17,25 +17,34 @@ function PlusIcon() { return <svg viewBox="0 0 24 24" fill="none" aria-hidden="t
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
 export function Workspace() {
-  const [history, setHistory] = useState<Route[]>([HOME]);
-  const [position, setPosition] = useState(0);
+  const [{ history, position }, dispatch] = useReducer(navigationReducer, initialNavigation);
   const route = history[position];
-  const navigate = (next: Route) => { setHistory(old => [...old.slice(0, position + 1), next]); setPosition(position + 1); };
-  const back = () => setPosition(old => Math.max(0, old - 1));
+  const navigate = (next: Route) => dispatch({ type: 'visit', route: next });
+  const back = () => dispatch({ type: 'back' });
   useEffect(() => {
+    const blocked = () => !!document.querySelector('dialog[open], [role="dialog"], [data-editing], [role="combobox"][aria-expanded="true"]');
     const key = (event: KeyboardEvent) => {
-      if (document.querySelector('[role="dialog"], [data-editing]') || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      if ((event.metaKey || event.ctrlKey) && event.key === '1') { event.preventDefault(); navigate(HOME); }
-      else if ((event.metaKey && event.key === '[') || (event.altKey && event.key === 'ArrowLeft')) { event.preventDefault(); back(); }
-      else if ((event.metaKey && event.key === ']') || (event.altKey && event.key === 'ArrowRight')) { event.preventDefault(); setPosition(old => Math.min(history.length - 1, old + 1)); }
+      if (event.defaultPrevented || event.isComposing) return;
+      const direction = navigationKey(event);
+      if (direction) {
+        event.preventDefault();
+        if (!blocked()) dispatch({ type: direction });
+        return;
+      }
+      if (blocked() || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || (event.target as HTMLElement)?.isContentEditable) return;
+      if ((event.metaKey || event.ctrlKey) && event.key === '1') { event.preventDefault(); dispatch({ type: 'visit', route: HOME }); }
     };
+    const suppressNativeHistory = (event: MouseEvent) => { if (navigationMouse(event.button)) event.preventDefault(); };
     const mouse = (event: MouseEvent) => {
-      if (document.querySelector('[role="dialog"], [data-editing]')) return;
-      if (event.button === 3 || event.button === 4) { event.preventDefault(); setPosition(old => Math.max(0, Math.min(history.length - 1, old + (event.button === 3 ? -1 : 1)))); }
+      const direction = navigationMouse(event.button);
+      if (!direction) return;
+      event.preventDefault();
+      if (!blocked()) dispatch({ type: direction });
     };
-    window.addEventListener('keydown', key); window.addEventListener('mouseup', mouse);
-    return () => { window.removeEventListener('keydown', key); window.removeEventListener('mouseup', mouse); };
-  }, [position, history]);
+    window.addEventListener('keydown', key); window.addEventListener('mousedown', suppressNativeHistory);
+    window.addEventListener('mouseup', mouse); window.addEventListener('auxclick', suppressNativeHistory);
+    return () => { window.removeEventListener('keydown', key); window.removeEventListener('mousedown', suppressNativeHistory); window.removeEventListener('mouseup', mouse); window.removeEventListener('auxclick', suppressNativeHistory); };
+  }, []);
   if (route.page === 'home') return <section className="home" aria-label="创作首页">
     <div className="home-entries">
       <div className="creation-entries">{entrances.map(({ name, image }) => <button key={name} className={`entry-card entrance-${image}`} aria-label={name} onClick={() => navigate({ page: 'creation', name })}>
