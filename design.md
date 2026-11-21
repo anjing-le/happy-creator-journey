@@ -60,7 +60,7 @@ OTA 后台约每小时检查，唤醒或切回窗口时补查已到期任务；�
 
 ## 5. 当前进度｜已核对
 
-当前公开版本为 **0.0.15**，本机已安装。创作工作区改为左侧对话、右侧任务与作品，去除文／图标题；输入框下方可选三个内置 Skill 和个人 Skill。新建图会话已真实跑通主会话派发独立生图与改图子会话、结果回传及保留原图。首页与后台更新方式保持不变，三平台安装包与更新签名验证通过。
+当前公开版本为 **0.0.16**，本机已安装。对话切换、Skill 和分类候选已统一为应用内自定义弹层；已实测对话切换、Skill 键盘选择、长标题换行及弹层关闭。创作工作区改为左侧对话、右侧任务与作品，去除文／图标题；输入框下方可选三个内置 Skill 和个人 Skill。新建图会话已真实跑通主会话派发独立生图与改图子会话、结果回传及保留原图。首页与后台更新方式保持不变，三平台安装包与更新签名验证通过。
 
 | 项目 | 实际状态 |
 | --- | --- |
@@ -76,7 +76,7 @@ OTA 后台约每小时检查，唤醒或切回窗口时补查已到期任务；�
 | 待完善能力 | 更多 Skill 的运行依赖、任务管理、视频渲染与 Windows 原生 Codex 真机验证。 |
 | 对外分发完善 | Windows 真机交互尚未验收；Apple 公证和 Windows 代码签名尚未配置。 |
 
-依据：[0.0.15 发布](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.15)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/44902019094)、[三平台构建、CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/44902022377)。
+依据：[0.0.16 发布](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.0.16)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/44905300742)、[三平台构建、CLI 与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/44905302852)。
 
 ## 6. 后续推进｜从素材库开始
 
