@@ -234,3 +234,24 @@ progress { width: 100%; height: 3px; accent-color: var(--gold); margin-top: 24px
 
 .chat-layout.no-history { grid-template-columns:minmax(0,1fr); max-width:900px; }
 .chat-layout.no-history .chat-main { padding-left:0; }
+.studio-layout { width:100%; max-width:none; grid-template-columns:minmax(320px, .95fr) minmax(320px, 1.05fr); gap:0; padding:0 28px 24px; }
+.studio-layout .chat-main { padding:0 24px 0 0; }
+.studio-layout .chat-messages { padding-top:8px; }
+.chat-session-select { max-width:260px; min-width:95px; border:0; background:transparent; color:var(--muted); font:inherit; font-size:12px; padding:5px 8px; }
+.composer-skill { max-width:220px; min-width:100px; padding:5px 7px; font:inherit; font-size:11px; color:#81734f; background:#ede9dd80; border:0; border-radius:6px; }
+.creation-results { min-height:0; min-width:0; overflow:auto; border-left:1px solid #48463e13; padding:8px 0 24px 24px; scrollbar-width:thin; }
+.results-empty { height:100%; min-height:200px; display:flex; flex-direction:column; justify-content:center; align-items:center; color:#aaa597; font-size:12px; }
+.results-empty>span { font-size:40px; color:#c5bea9; }
+.generation-task { padding:15px; margin-bottom:18px; border:1px solid #48463e13; border-radius:12px; background:#fcfbf65c; }
+.generation-task>header { display:flex; gap:8px; align-items:center; font-size:12px; }
+.task-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.generation-task small, .task-skill { font-size:10px; color:var(--muted); }
+.task-skill { margin:9px 0; }
+.task-dot { width:6px; height:6px; flex:none; border-radius:50%; background:#9ba782; }
+.task-dot.running { background:#cfb36f; }
+.task-dot.failed { background:#ba8778; }
+.result-images { display:grid; gap:12px; margin-top:12px; }
+.result-images button { padding:0; background:transparent; cursor:zoom-in; }
+.result-images img { display:block; width:100%; max-height:580px; object-fit:contain; border-radius:7px; }
+.task-revise { margin-top:10px; font-size:11px; }
+@media(max-width:760px) { .studio-layout { grid-template-columns:minmax(250px,1fr) minmax(230px,1fr); padding:0 14px 16px; } .studio-layout .chat-main { padding-right:12px; } .creation-results { padding-left:12px; } .chat-session-select { max-width:140px; } }

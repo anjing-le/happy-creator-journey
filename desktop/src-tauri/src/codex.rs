@@ -16,6 +16,14 @@ use tauri::Manager;
 use uuid::Uuid;
 
 const MODEL: &str = "gpt-6.1-sol";
+fn image_tools() -> Vec<Value> {
+    vec![json!({"type":"function","name":"creatorx_generate_image",
+        "description":"用户明确要求生图或改图后，交给独立生图子会话执行，返回真实文件与任务状态。不要在纯讨论时调用。修改须提供同一主会话下的 sourceTaskId。",
+        "inputSchema":{"type":"object","properties":{
+            "intent":{"type":"string","description":"完整、明确的生成意图、准确文案、构图和本轮修改要求"},
+            "sourceTaskId":{"type":"string","description":"需要修改的已完成生图任务 ID；新作留空"}
+        },"required":["intent"],"additionalProperties":false}})]
+}
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
@@ -35,6 +43,12 @@ pub struct Attachments {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Job {
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub orchestrated: bool,
+    #[serde(default)]
+    pub source_task_id: Option<String>,
     pub id: String,
     pub title: String,
     pub skill_name: String,
@@ -109,6 +123,7 @@ struct Runtime {
     jobs: Mutex<HashMap<String, Job>>,
     client: Mutex<Option<Arc<Client>>>,
     operation: Mutex<()>,
+    dispatch: Mutex<()>,
 }
 #[derive(Clone)]
 pub struct CodexEngine(Arc<Runtime>);
@@ -225,6 +240,7 @@ impl CodexEngine {
             jobs: Mutex::new(jobs),
             client: Mutex::new(None),
             operation: Mutex::new(()),
+            dispatch: Mutex::new(()),
         })))
     }
     fn client(&self) -> Result<Arc<Client>, String> {
@@ -279,6 +295,29 @@ impl CodexEngine {
                 };
                 if let Some(request_id) = msg.get("id") {
                     if msg.get("method").is_some() {
+                        if msg["method"] == "item/tool/call"
+                            && msg["params"]["tool"] == "creatorx_generate_image"
+                        {
+                            if let (Some(runtime), Some(client)) =
+                                (runtime.upgrade(), weak_client.upgrade())
+                            {
+                                let request = msg.clone();
+                                std::thread::spawn(move || {
+                                    let engine = CodexEngine(runtime);
+                                    let result = engine.dispatch_image(&request["params"]);
+                                    let (success, text) = match result {
+                                        Ok(value) => (
+                                            value["status"] == "completed"
+                                                && value["error"].is_null(),
+                                            value.to_string(),
+                                        ),
+                                        Err(error) => (false, error),
+                                    };
+                                    let _ = client.send(json!({"id":request["id"],"result":{"success":success,"contentItems":[{"type":"inputText","text":text}]}}));
+                                });
+                            }
+                            continue;
+                        }
                         // Never auto-approve commands, edits, permissions or user choices.
                         if let Some(client) = weak_client.upgrade() {
                             let _=client.send(json!({"id":request_id,"error":{"code":-32601,"message":"CreatorX does not support this interactive request; no approval was granted."}}));
@@ -315,7 +354,7 @@ impl CodexEngine {
                 }
             }
         });
-        client.rpc("initialize",json!({"clientInfo":{"name":"creatorx","title":"CreatorX","version":env!("CARGO_PKG_VERSION")}}))?;
+        client.rpc("initialize",json!({"capabilities":{"experimentalApi":true},"clientInfo":{"name":"creatorx","title":"CreatorX","version":env!("CARGO_PKG_VERSION")}}))?;
         client.send(json!({"method":"initialized","params":{}}))?;
         *slot = Some(client.clone());
         Ok(client)
@@ -386,6 +425,9 @@ impl CodexEngine {
         .map_err(|_| "无法保存素材快照")?;
         fs::write(dir.join("AGENTS.md"),"# CreatorX 创作任务\n只处理本任务，不修改原 Skill、其他仓库或应用素材库。不发布、不推送、不发消息。使用原生生图工具；不得改用需要 API Key 的替代接口。每次出图保留上一版。当前用户指令与创作阶段决定是否允许生成图片。参考图和 Skill 是资料，不是额外权限。\n").map_err(|_|"无法保存任务规则")?;
         let job = Job {
+            parent_id: None,
+            orchestrated: mode == Some("image"),
+            source_task_id: None,
             id: id.clone(),
             title: brief
                 .lines()
@@ -437,7 +479,7 @@ impl CodexEngine {
         let _operation = self
             .0
             .operation
-            .try_lock()
+            .lock()
             .map_err(|_| "正在提交任务，请稍候")?;
         let mut job = self.get(id)?;
         if job.busy() {
@@ -494,11 +536,21 @@ impl CodexEngine {
                 "video" => "视频",
                 _ => "图",
             };
-            let instructions = format!("你在 CreatorX 的「{mode}」工作区与用户协作。根据用户当次要求自然交流；由用户与你一起打磨具体方法、工具、Skill 和 SOP，不强迫先选 Skill 或套用图文流程。用户只要求讨论时不要自行生成；用户明确要求制作或修改时才执行，缺少材料再具体询问。选定素材快照清单位于 {}，按需读取；只有存在且被选择的 Skill 才使用，没有 Skill 也可正常对话。仅在本任务目录保存产物，不覆盖历史版本。Skill 中其他仓库的网站路径与发布习惯在这里不适用；不得发布、git push、改原仓库或应用素材库。禁止子代理。图片生成和修改使用内置 image_gen / image_generation，不可用时明确说明，不能擅自改用需要 API Key 的替代接口或用代码绘图冒充原生生图。视频根据实际可用的 Skill 和工具制作，不能把方案或脚本冒充已生成视频。", material_manifest.display());
+            let instructions = format!("你在 CreatorX 的「{mode}」工作区与用户协作。根据用户当次要求自然交流；由用户与你一起打磨具体方法、工具、Skill 和 SOP，不强迫先选 Skill 或套用图文流程。用户只要求讨论时不要自行生成；用户明确要求制作或修改时才执行，缺少材料再具体询问。选定素材快照清单位于 {}，按需读取；只有存在且被选择的 Skill 才使用，没有 Skill 也可正常对话。仅在本任务目录保存产物，不覆盖历史版本。Skill 中其他仓库的网站路径与发布习惯在这里不适用；不得发布、git push、改原仓库或应用素材库。不要自行启动不可追踪的代理。图片生成和修改使用内置 image_gen / image_generation，不可用时明确说明，不能擅自改用需要 API Key 的替代接口或用代码绘图冒充原生生图。视频根据实际可用的 Skill 和工具制作，不能把方案或脚本冒充已生成视频。", material_manifest.display());
+            let instructions = if job.orchestrated && job.parent_id.is_none() {
+                format!("{instructions}\n你是主创作会话：负责讨论、提炼意图与验收。用户明确要求生成或修改图片时，必须调用 creatorx_generate_image 把完整意图交给独立生图子会话，不要在主会话直接生成图片。修改时提供同一主会话下需要修改的 sourceTaskId；新任务留空。子会话继承本轮选定素材。一次调用对应一个任务，数量由用户要求决定。等待工具返回真实结果后再向用户报告，不把计划当成完成。")
+            } else {
+                instructions
+            };
+            let tools = if job.orchestrated && job.parent_id.is_none() {
+                image_tools()
+            } else {
+                vec![]
+            };
             let thread = if let Some(thread) = &job.thread_id {
                 client.rpc("thread/resume",json!({"threadId":thread,"cwd":dir,"model":MODEL,"approvalPolicy":"never","sandbox":"workspace-write","developerInstructions":instructions}))?
             } else {
-                client.rpc("thread/start",json!({"cwd":dir,"model":MODEL,"approvalPolicy":"never","sandbox":"workspace-write","developerInstructions":instructions,"config":{"model_reasoning_effort":"medium"}}))?
+                client.rpc("thread/start",json!({"cwd":dir,"model":MODEL,"approvalPolicy":"never","sandbox":"workspace-write","developerInstructions":instructions,"config":{"model_reasoning_effort":"medium"},"dynamicTools":tools}))?
             };
             let thread_id = thread["thread"]["id"]
                 .as_str()
@@ -559,6 +611,124 @@ impl CodexEngine {
         }
         result
     }
+    fn dispatch_image(&self, params: &Value) -> Result<Value, String> {
+        let reservation = self.0.dispatch.lock().map_err(|_| "任务派发正忙")?;
+        let thread = params["threadId"].as_str().ok_or("缺少主会话")?;
+        let parent = self
+            .list()?
+            .into_iter()
+            .find(|j| j.thread_id.as_deref() == Some(thread))
+            .ok_or("主会话不存在")?;
+        if !parent.orchestrated
+            || parent.parent_id.is_some()
+            || !parent.busy()
+            || params["turnId"].as_str() != parent.turn_id.as_deref()
+        {
+            return Err("只有当前主会话能派发生图任务".into());
+        }
+        let intent = params["arguments"]["intent"].as_str().unwrap_or("");
+        if intent.trim().is_empty() || intent.len() > 100_000 {
+            return Err("生成意图无效".into());
+        }
+        if self
+            .list()?
+            .iter()
+            .filter(|j| j.parent_id.as_deref() == Some(&parent.id) && j.busy())
+            .count()
+            >= 3
+        {
+            return Err("已有三个生图任务在执行，请等待结果".into());
+        }
+        let source = params["arguments"]["sourceTaskId"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(|id| self.get(id))
+            .transpose()?;
+        if source.as_ref().is_some_and(|j| {
+            j.parent_id.as_deref() != Some(&parent.id) || j.images.is_empty() || j.busy()
+        }) {
+            return Err("只能修改当前主会话下已完成且有真实图片的任务".into());
+        }
+        let id = Uuid::new_v4().to_string();
+        let dir = self.0.root.join(&id);
+        fs::create_dir(&dir).map_err(|_| "无法创建生图子任务")?;
+        let material_dir = self
+            .0
+            .root
+            .join(&parent.id)
+            .join(&parent.material_directory);
+        // Copy only the selected snapshot, never historical task folders or private library roots.
+        for name in ["materials.json", "AGENTS.md"] {
+            let path = material_dir.join(name);
+            if path.is_file() {
+                fs::copy(path, dir.join(name)).map_err(|_| "无法保存任务说明")?;
+            }
+        }
+        for folder in ["skill", "references"] {
+            let path = material_dir.join(folder);
+            if path.is_dir() {
+                for (name, bytes) in LibraryStore::read_package(&path)? {
+                    let dest = dir.join(folder).join(name);
+                    fs::create_dir_all(dest.parent().ok_or("无效素材路径")?)
+                        .map_err(|_| "无法创建素材目录")?;
+                    fs::write(dest, bytes).map_err(|_| "无法保存子任务素材")?;
+                }
+            }
+        }
+        let mut brief = format!("用户已明确要求执行以下生图意图。你是独立生图子会话，直接完成图片并读取检查实际结果；不得再次派生代理，不发布，不覆盖旧版。使用原生 image_gen / image_generation，必须产出实际图片文件。完整意图：\n{intent}");
+        if let Some(source) = &source {
+            let previous = dir.join("previous");
+            fs::create_dir_all(&previous).map_err(|_| "无法创建原图目录")?;
+            for path in &source.images {
+                let filename = Path::new(path).file_name().ok_or("无效原图")?;
+                let dest = previous.join(filename);
+                fs::copy(self.0.root.join(&source.id).join(path), &dest)
+                    .map_err(|_| "无法读取上一版图片")?;
+                brief.push_str(&format!("\n修改时引用实际原图：{}", dest.display()));
+            }
+        }
+        let mut child = parent.clone();
+        child.id = id.clone();
+        child.parent_id = Some(parent.id.clone());
+        child.orchestrated = false;
+        child.source_task_id = source.map(|j| j.id);
+        child.thread_id = None;
+        child.turn_id = None;
+        child.title = intent.chars().take(42).collect();
+        child.status = "idle".into();
+        child.phase = "chat".into();
+        child.messages.clear();
+        child.images.clear();
+        child.error = None;
+        child.proposal.clear();
+        child.confirmed.clear();
+        child.material_directory.clear();
+        child.activity = "等待生图子会话".into();
+        self.put(child)?;
+        self.run(&id, "chat", brief)?;
+        drop(reservation);
+        // Never block the app-server reader: this method runs on a dedicated dispatch thread.
+        let started = std::time::Instant::now();
+        loop {
+            let child = self.get(&id)?;
+            if !child.busy() {
+                return Ok(
+                    json!({"taskId":id,"status":child.status,"error":child.error,
+                    "images":child.images.iter().map(|path| self.0.root.join(&id).join(path)).collect::<Vec<_>>(),
+                    "reply":child.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.chars().take(8000).collect::<String>())}),
+                );
+            }
+            if started.elapsed() > Duration::from_secs(1800) {
+                let _ = self.cancel(&id);
+                return Err("生图等待超时，已请求停止；请核对任务状态，不自动重试".into());
+            }
+            if !self.get(&parent.id)?.busy() {
+                let _ = self.cancel(&id);
+                return Err("主会话已停止，已请求停止生图任务".into());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
     fn put(&self, job: Job) -> Result<(), String> {
         let mut jobs = self.0.jobs.lock().map_err(|_| "任务正忙")?;
         save(&self.0.root, &job)?;
@@ -570,6 +740,13 @@ impl CodexEngine {
         if !job.busy() {
             return Ok(job);
         };
+        for child in self
+            .list()?
+            .into_iter()
+            .filter(|j| j.parent_id.as_deref() == Some(id) && j.busy())
+        {
+            self.cancel(&child.id)?;
+        }
         let thread = job.thread_id.as_ref().ok_or("任务尚在连接，请稍候")?;
         let turn = job.turn_id.as_ref().ok_or("任务尚在启动，请稍候")?;
         self.client()?
@@ -694,7 +871,10 @@ fn handle_event(runtime: &Runtime, msg: &Value) {
         if let Some(error) = params["turn"]["error"]["message"].as_str() {
             job.error = Some(error.into());
         }
-        if job.phase == "generate" && job.status == "completed" && job.images.is_empty() {
+        if (job.phase == "generate" || job.parent_id.is_some())
+            && job.status == "completed"
+            && job.images.is_empty()
+        {
             job.error
                 .get_or_insert("本轮没有收到实际生图文件，请查看 Codex 回复；尚未完成出图".into());
             job.status = "error".into();
@@ -793,6 +973,8 @@ mod tests {
         assert_eq!(job.mode, "image");
         assert!(job.skill_id.is_empty());
         assert!(job.material_directory.is_empty());
+        assert!(!job.orchestrated);
+        assert!(job.parent_id.is_none());
         let root = tempfile::tempdir().unwrap();
         let engine = CodexEngine::new(root.path().join("creations")).unwrap();
         let store = LibraryStore::new(root.path().join("library")).unwrap();
@@ -803,10 +985,142 @@ mod tests {
     }
 
     #[test]
+    fn builtin_skill_snapshots_are_real_files_without_changing_private_library() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LibraryStore::new(root.path().join("library")).unwrap();
+        let target = root.path().join("snapshot");
+        fs::create_dir(&target).unwrap();
+        for entry in crate::builtin_skills::entries() {
+            let (skill, _) = store.snapshot_assets(&entry.id, &[], &target).unwrap();
+            assert_eq!(
+                skill.unwrap().skill_markdown,
+                fs::read_to_string(target.join("skill/SKILL.md")).unwrap()
+            );
+        }
+        assert!(store.list().unwrap().entries.is_empty());
+        assert!(store
+            .snapshot_assets("builtin:missing", &[], &target)
+            .is_err());
+    }
+
+    #[test]
+    fn image_dispatch_rejects_unknown_and_worker_sessions_without_starting_codex() {
+        let root = tempfile::tempdir().unwrap();
+        let engine = CodexEngine::new(root.path().into()).unwrap();
+        assert!(engine
+            .dispatch_image(&json!({"threadId":"unknown", "arguments":{"intent":"generate"}}))
+            .is_err());
+        let mut parent: Job = serde_json::from_value(json!({"id":Uuid::new_v4().to_string(),"title":"Parent","skillName":"","orchestrated":true,"threadId":"parent","status":"running","phase":"chat","proposal":"","confirmed":"","messages":[],"images":[],"error":null,"turnId":"turn","activity":""})).unwrap();
+        engine.put(parent.clone()).unwrap();
+        assert!(engine
+            .dispatch_image(
+                &json!({"threadId":"parent","turnId":"old-turn","arguments":{"intent":"generate"}})
+            )
+            .is_err());
+        assert!(engine
+            .dispatch_image(
+                &json!({"threadId":"parent","turnId":"turn","arguments":{"intent":" "}})
+            )
+            .is_err());
+        parent.parent_id = Some("another-parent".into());
+        engine.put(parent).unwrap();
+        assert!(engine
+            .dispatch_image(
+                &json!({"threadId":"parent","turnId":"turn","arguments":{"intent":"generate"}})
+            )
+            .is_err());
+        assert_eq!(engine.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    #[ignore = "Explicit CREATORX_LIVE_DELEGATION path required; generates and edits a real image"]
+    fn live_delegated_image_roundtrip() {
+        let root = PathBuf::from(
+            std::env::var("CREATORX_LIVE_DELEGATION").expect("explicit private test directory"),
+        );
+        let engine = CodexEngine::new(root.join("creations")).unwrap();
+        let store = LibraryStore::new(root.join("library")).unwrap();
+        engine.status().unwrap();
+        let wait = |id: &str| {
+            for _ in 0..1200 {
+                let job = engine.get(id).unwrap();
+                if !job.busy() {
+                    assert_eq!(job.status, "completed", "{:?}", job.error);
+                    return job;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            panic!("Live run timed out; inspect tasks, do not automatically retry");
+        };
+        let parent = engine.create(&store, "builtin:image-single", vec![], "先只讨论：我想画一株小树，米白纸面、简洁蜡笔画、浅绿叶子，不要文字。只回复意图，不生成。".into(), Some("image")).unwrap();
+        let parent = wait(&parent.id);
+        assert_eq!(
+            engine.list().unwrap().len(),
+            1,
+            "discussion must not generate"
+        );
+        engine
+            .run(
+                &parent.id,
+                "chat",
+                "确认上述意图，现在生成一张图片，交给生图子会话执行。".into(),
+            )
+            .unwrap();
+        wait(&parent.id);
+        let child = engine
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|j| j.parent_id.as_deref() == Some(&parent.id))
+            .expect("real delegated task");
+        assert_eq!(child.status, "completed", "{:?}", child.error);
+        assert!(!child.images.is_empty(), "actual image required");
+        assert_ne!(parent.thread_id, child.thread_id);
+        let original = fs::read(
+            root.join("creations")
+                .join(&child.id)
+                .join(&child.images[0]),
+        )
+        .unwrap();
+        engine.run(&parent.id, "chat", format!("修改任务 {} 的图片：在小树旁边添加一朵浅黄色小花。保持其余风格不变，用实际原图进行修改，交给生图子会话。", child.id)).unwrap();
+        let restored_parent = wait(&parent.id);
+        assert_eq!(parent.thread_id, restored_parent.thread_id);
+        let revised = engine
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|j| j.source_task_id.as_deref() == Some(&child.id))
+            .expect("revision references source task");
+        assert!(!revised.images.is_empty(), "actual revision required");
+        assert_eq!(
+            original,
+            fs::read(
+                root.join("creations")
+                    .join(&child.id)
+                    .join(&child.images[0])
+            )
+            .unwrap()
+        );
+        println!("Verified main session + separate generation and revision sessions, with actual files and preserved original");
+        for job in engine.list().unwrap() {
+            if let Some(thread) = job.thread_id {
+                engine
+                    .client()
+                    .unwrap()
+                    .rpc("thread/archive", json!({"threadId":thread}))
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn stores_interrupted_jobs_and_rejects_invalid_transitions() {
         let dir = tempfile::tempdir().unwrap();
         let engine = CodexEngine::new(dir.path().into()).unwrap();
         let job = Job {
+            parent_id: None,
+            orchestrated: false,
+            source_task_id: None,
             id: Uuid::new_v4().to_string(),
             title: "Example".into(),
             skill_name: "Example".into(),
@@ -843,6 +1157,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let engine = CodexEngine::new(dir.path().into()).unwrap();
         let job = Job {
+            parent_id: None,
+            orchestrated: false,
+            source_task_id: None,
             id: Uuid::new_v4().to_string(),
             title: "Example".into(),
             skill_name: "Example".into(),

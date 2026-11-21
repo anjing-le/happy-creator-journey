@@ -306,13 +306,22 @@ impl LibraryStore {
         let skill = if skill_id.is_empty() {
             None
         } else {
-            let entry = read(skill_id)?;
+            let entry = if skill_id.starts_with("builtin:") {
+                crate::builtin_skills::get(skill_id).ok_or("内置 Skill 不存在")?
+            } else {
+                read(skill_id)?
+            };
             if entry.kind != Kind::Skill {
                 return Err("请选择真实 Skill 文件夹".into());
             }
             let folder = destination.join("skill");
             fs::create_dir_all(&folder).map_err(|_| "无法创建 Skill 快照")?;
-            for (name, bytes) in Self::read_package(&self.root.join("skills").join(skill_id))? {
+            let files = if skill_id.starts_with("builtin:") {
+                vec![("SKILL.md".into(), entry.skill_markdown.as_bytes().to_vec())]
+            } else {
+                Self::read_package(&self.root.join("skills").join(skill_id))?
+            };
+            for (name, bytes) in files {
                 let path = folder.join(name);
                 fs::create_dir_all(path.parent().ok_or("路径无效")?)
                     .map_err(|_| "无法创建资源目录")?;

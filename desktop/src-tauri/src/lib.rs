@@ -1,5 +1,6 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
+mod builtin_skills;
 pub mod cli;
 mod codex;
 mod library;
@@ -61,6 +62,7 @@ pub fn run() {
             library::library_open_skill_folder,
             library::library_add_category,
             library::library_move_category,
+            builtin_skills::creation_builtin_skills,
             codex::codex_status,
             codex::creation_list,
             codex::creation_start,
