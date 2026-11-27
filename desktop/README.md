@@ -22,7 +22,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 npm run desktop
 ```
 
-打包后可用 `node scripts/check-cli.mjs <应用可执行文件>` 验证独立进程 CLI 的 JSON 输出、IP 底座、分类、删除与修订冲突保护。
+打包后可用 `node scripts/check-cli.mjs <应用可执行文件>` 验证独立进程 CLI 的 JSON 输出、IP 底座、分类、删除与修订冲突保护。[0.1.0 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.1.0)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/46008605776) 与 [三平台构建、Windows 发布版 CLI 及签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/46008609922) 均已核验通过。
 
 ## 本机数据与图标边界
 

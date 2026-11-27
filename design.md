@@ -132,7 +132,8 @@ flowchart LR
   - 首页更新为上方“图文 ｜ 视频”、下方整行“样板间”；
   - 样板间提供 `IP 底座`（含安静起步模板一键预填）、`制式 Skills`（内置 5 套样板＋个人库）与 `风格提示词` 画廊浏览及“去创作”直达联动；
   - 创作台覆盖 **卡片图文**（分页卡片＋短配文＋历版切换与单页微调）、**长文配图**（Markdown 内嵌槽位预览＋配图微调）与 **视频创作**（口播逐字稿＋分镜镜头卡＋关键帧／分镜包复制）。
-- **自动化验证**：TypeScript 编译与构建、发布校验脚本、前端导航与更新策略单测、Rust 资产库／Harness 四道硬门禁单测及跨进程 CLI 集成测试全部通过。
+- **自动化与三平台发布验证**：TypeScript 编译与构建、发布校验脚本、前端导航与更新策略单测、Rust 资产库／Harness 四道硬门禁单测、跨进程 CLI 集成测试、GitHub 双平台检查与三平台更新签名安装包（Apple Silicon、Intel Mac、Windows x64）全部通过并已公开 `0.1.0` Release，本机 `~/Applications/CreatorX.app` 已更新至正式版 `0.1.0` 并恢复本地透明 Finder 图标。
+  - 核验依据：[0.1.0 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.1.0)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/46008605776)、[三平台构建、Windows CLI 与更新签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/46008609922)。
 
 ### 6.2 待验证边界与下一步打磨重点
 - [x] **阶段 0～4 横向架构落地**：完成 Creation Harness 四层架构、本机归档清零、IP 底座＋样板间画廊、图文双制式与视频分镜工作台。
