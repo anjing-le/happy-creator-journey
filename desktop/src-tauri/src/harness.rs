@@ -1,10 +1,12 @@
-//! Creation Harness core: enforces immutable context snapshots, blueprint stage gates,
-//! append-only slot artifact verification, and showcase promotion across pluggable local agents.
+//! Minimal Creation Harness:
+//! 1. Assembles immutable atomic asset snapshots (`snapshots/<seq>/`) for the chosen local Agent.
+//! 2. Delegates image generation & revision to isolated worker sessions, verifying real image bytes and preserving every prior version.
+//! 3. Saves verified results + prompts + tags straight back into the Showcase.
 use crate::{
     adapters::{
         AdapterEvent, AdapterRegistry, AdapterStatus, Capability, EventSink, TurnRequest,
     },
-    library::{DeliverableFormat, Entry, Kind, LibraryStore, Maturity},
+    library::{Entry, Kind, LibraryStore, Modality},
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -21,16 +23,6 @@ use std::{
 use tauri::Manager;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum HarnessStage {
-    #[default]
-    Drafting,
-    BlueprintReady,
-    Rendering,
-    Review,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
@@ -39,72 +31,20 @@ pub struct Message {
     pub text: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ArtifactVersion {
-    pub version: u32,
-    pub path: String,
-    pub task_id: String,
-    #[serde(default)]
-    pub note: String,
-    pub created_at: u64,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BlueprintSlot {
-    pub slot_id: String,
-    pub label: String,
-    #[serde(default)]
-    pub text: String,
-    #[serde(default)]
-    pub visual_prompt: String,
-    #[serde(default)]
-    pub duration_sec: Option<u32>,
-    #[serde(default = "default_slot_status")]
-    pub status: String,
-    #[serde(default)]
-    pub error: Option<String>,
-    #[serde(default)]
-    pub versions: Vec<ArtifactVersion>,
-}
-
-fn default_slot_status() -> String {
-    "pending".into()
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Blueprint {
-    #[serde(default)]
-    pub summary_copy: String,
-    #[serde(default)]
-    pub body_markdown: String,
-    #[serde(default)]
-    pub slots: Vec<BlueprintSlot>,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentsUpdate {
-    #[serde(default = "default_true")]
-    pub include_ip: bool,
-    #[serde(default)]
-    pub track: String,
     #[serde(default)]
     pub skill_id: String,
     #[serde(default)]
     pub prompt_ids: Vec<String>,
 }
 
-fn default_true() -> bool {
-    true
+fn default_mode() -> String {
+    "image_text".into()
 }
 fn default_adapter() -> String {
     "codex".into()
-}
-fn default_deliverable() -> DeliverableFormat {
-    DeliverableFormat::Cards
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -114,20 +54,12 @@ pub struct CreationJob {
     pub parent_id: Option<String>,
     #[serde(default)]
     pub source_task_id: Option<String>,
-    #[serde(default)]
-    pub slot_id: Option<String>,
-    #[serde(default)]
-    pub revision_note: String,
     pub id: String,
     pub title: String,
-    #[serde(default = "default_deliverable", alias = "mode")]
-    pub deliverable: DeliverableFormat,
+    #[serde(default = "default_mode")]
+    pub mode: String,
     #[serde(default = "default_adapter")]
     pub adapter_id: String,
-    #[serde(default = "default_true")]
-    pub include_ip: bool,
-    #[serde(default)]
-    pub track: String,
     #[serde(default)]
     pub skill_id: String,
     #[serde(default)]
@@ -137,11 +69,7 @@ pub struct CreationJob {
     #[serde(default)]
     pub snapshot_seq: u32,
     #[serde(default)]
-    pub stage: HarnessStage,
-    #[serde(default)]
-    pub blueprint_approved: bool,
-    #[serde(default)]
-    pub blueprint: Blueprint,
+    pub draft_markdown: String,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub status: String,
@@ -166,17 +94,16 @@ impl CreationJob {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromoteShowcaseRequest {
+    pub target_job_id: String,
+    pub modality: Modality,
     pub name: String,
-    pub category: String,
     pub prompt: String,
     #[serde(default)]
-    pub sample_input: String,
+    pub sample: String,
     #[serde(default)]
-    pub sample_output: String,
+    pub tags: Vec<String>,
     #[serde(default)]
     pub notes: String,
-    #[serde(default)]
-    pub slot_ids: Vec<String>,
 }
 
 struct Runtime {
@@ -198,19 +125,6 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn validate_slot_id(raw: &str) -> Result<String, String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty()
-        || trimmed.len() > 48
-        || !trimmed.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
-        })
-    {
-        return Err("槽位标识需为 1–48 位小写字母、数字、连字符或下划线（如 card-1、cover、shot-1）".into());
-    }
-    Ok(trimmed.to_string())
-}
-
 fn validate_image_magic(bytes: &[u8]) -> Option<&'static str> {
     if bytes.is_empty() {
         return None;
@@ -226,51 +140,21 @@ fn validate_image_magic(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn harness_dynamic_tools() -> Vec<Value> {
-    vec![
-        json!({
-            "type": "function",
-            "name": "creatorx_update_blueprint",
-            "description": "整理或更新右侧工作台的结构化蓝图（卡片分页表 / 长文正文与插图锚点 / 视频口播与分镜表）。讨论定稿阶段调用此工具将结构化方案同步到右侧画布供用户确认。",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "summaryCopy": { "type": "string", "description": "发布标题与短配文（卡片图文/视频）或文章导语摘要（长文）" },
-                    "bodyMarkdown": { "type": "string", "description": "长文定稿 Markdown 正文（可用 ![说明](slot:slot-id) 标记插图位置）或视频完整口播逐字稿" },
-                    "slots": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "slotId": { "type": "string", "description": "唯一槽位 ID，仅小写字母数字与连字符，如 card-1、cover、fig-1、shot-1" },
-                                "label": { "type": "string", "description": "槽位显示标题，如 第 1 页·封面、封面图、镜头 1·开场钩子" },
-                                "text": { "type": "string", "description": "卡片图内逐字准确文案 / 插图图注 / 该镜头对应台词" },
-                                "visualPrompt": { "type": "string", "description": "画面主体、构图、留白或镜头运动描述" },
-                                "durationSec": { "type": "integer", "description": "视频单镜预计秒数（图文可省略）" }
-                            },
-                            "required": ["slotId", "label"]
-                        }
-                    }
-                },
-                "required": ["slots"],
-                "additionalProperties": false
-            }
-        }),
-        json!({
-            "type": "function",
-            "name": "creatorx_render_slot",
-            "description": "在蓝图已经过用户确认放行后，针对单个 slotId 派发独立生图或原图修订子任务，并将真实文件追加写入该槽位版本链。未获确认前请勿调用。",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "slotId": { "type": "string", "description": "蓝图中已存在的 slotId" },
-                    "revisionNote": { "type": "string", "description": "若是基于该槽位已有原图微调，说明本轮具体修改点；首次生成留空" }
-                },
-                "required": ["slotId"],
-                "additionalProperties": false
-            }
-        }),
-    ]
+fn image_delegation_tools() -> Vec<Value> {
+    vec![json!({
+        "type": "function",
+        "name": "creatorx_generate_image",
+        "description": "当用户明确要求生图或改图时，将完整视觉意图与准确图内文字交给独立生图子会话执行，返回真实图片文件与任务状态。纯讨论或改文阶段不要调用。若基于已有生图任务修改，传入同一主会话下的 sourceTaskId；新图留空。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "intent": { "type": "string", "description": "完整、明确的画面构图、角色特征、图内逐字准确文案及修改点" },
+                "sourceTaskId": { "type": "string", "description": "需要基于原图微调的已完成生图子任务 ID；生成新图留空" }
+            },
+            "required": ["intent"],
+            "additionalProperties": false
+        }
+    })]
 }
 
 fn atomic_save_file(dest: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -305,165 +189,6 @@ fn save_job_record(root: &Path, job: &CreationJob) -> Result<(), String> {
     atomic_save_file(&dir.join("job.json"), &payload)
 }
 
-fn write_workspace_contract_files(root: &Path, job: &CreationJob) -> Result<(), String> {
-    if job.parent_id.is_some() {
-        return Ok(());
-    }
-    let dir = root.join(&job.id);
-    atomic_save_file(&dir.join("draft.md"), job.blueprint.body_markdown.as_bytes())?;
-    let contract = json!({
-        "deliverable": job.deliverable,
-        "approved": job.blueprint_approved,
-        "summaryCopy": job.blueprint.summary_copy,
-        "bodyMarkdown": job.blueprint.body_markdown,
-        "slots": job.blueprint.slots.iter().map(|s| json!({
-            "slotId": s.slot_id,
-            "label": s.label,
-            "text": s.text,
-            "visualPrompt": s.visual_prompt,
-            "durationSec": s.duration_sec
-        })).collect::<Vec<_>>()
-    });
-    atomic_save_file(
-        &dir.join("blueprint.json"),
-        &serde_json::to_vec_pretty(&contract).map_err(|_| "无法序列化蓝图契约")?,
-    )
-}
-
-fn merge_blueprint_payload(
-    existing: &Blueprint,
-    payload: &Value,
-) -> Result<(Blueprint, bool), String> {
-    let summary_copy = payload
-        .get("summaryCopy")
-        .and_then(Value::as_str)
-        .unwrap_or(&existing.summary_copy)
-        .chars()
-        .take(16_000)
-        .collect::<String>();
-    let body_markdown = payload
-        .get("bodyMarkdown")
-        .and_then(Value::as_str)
-        .unwrap_or(&existing.body_markdown)
-        .chars()
-        .take(200_000)
-        .collect::<String>();
-    let slots = if let Some(arr) = payload.get("slots").and_then(Value::as_array) {
-        if arr.len() > 32 {
-            return Err("单个创作任务最多支持 32 个槽位".into());
-        }
-        let mut seen = std::collections::HashSet::new();
-        let mut merged = Vec::with_capacity(arr.len());
-        for item in arr {
-            let slot_id = validate_slot_id(
-                item.get("slotId")
-                    .and_then(Value::as_str)
-                    .ok_or("蓝图槽位缺少 slotId")?,
-            )?;
-            if !seen.insert(slot_id.clone()) {
-                return Err(format!("蓝图槽位 ID 重复：{slot_id}"));
-            }
-            let label = item
-                .get("label")
-                .and_then(Value::as_str)
-                .unwrap_or(&slot_id)
-                .trim()
-                .chars()
-                .take(80)
-                .collect::<String>();
-            if label.is_empty() {
-                return Err("蓝图槽位标题不能为空".into());
-            }
-            let text = item
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(8_000)
-                .collect::<String>();
-            let visual_prompt = item
-                .get("visualPrompt")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .chars()
-                .take(8_000)
-                .collect::<String>();
-            let duration_sec = item
-                .get("durationSec")
-                .and_then(Value::as_u64)
-                .map(|n| n.min(600) as u32);
-            let old = existing.slots.iter().find(|s| s.slot_id == slot_id);
-            merged.push(BlueprintSlot {
-                slot_id,
-                label,
-                text,
-                visual_prompt,
-                duration_sec,
-                status: old
-                    .map(|s| s.status.clone())
-                    .unwrap_or_else(default_slot_status),
-                error: old.and_then(|s| s.error.clone()),
-                versions: old.map(|s| s.versions.clone()).unwrap_or_default(),
-            });
-        }
-        merged
-    } else {
-        existing.slots.clone()
-    };
-
-    let content_changed = summary_copy != existing.summary_copy
-        || body_markdown != existing.body_markdown
-        || slots.len() != existing.slots.len()
-        || slots.iter().zip(existing.slots.iter()).any(|(a, b)| {
-            a.slot_id != b.slot_id
-                || a.label != b.label
-                || a.text != b.text
-                || a.visual_prompt != b.visual_prompt
-                || a.duration_sec != b.duration_sec
-        });
-
-    Ok((
-        Blueprint {
-            summary_copy,
-            body_markdown,
-            slots,
-        },
-        content_changed,
-    ))
-}
-
-fn sync_disk_contract_if_modified(root: &Path, job: &mut CreationJob) {
-    if job.parent_id.is_some() {
-        return;
-    }
-    let dir = root.join(&job.id);
-    if let Ok(draft) = fs::read_to_string(dir.join("draft.md")) {
-        if !draft.trim().is_empty() && draft != job.blueprint.body_markdown {
-            job.blueprint.body_markdown = draft.chars().take(200_000).collect();
-        }
-    }
-    if let Ok(bytes) = fs::read(dir.join("blueprint.json")) {
-        if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
-            if let Ok((mut merged, changed)) = merge_blueprint_payload(&job.blueprint, &val) {
-                if merged.body_markdown.trim().is_empty()
-                    && !job.blueprint.body_markdown.trim().is_empty()
-                {
-                    merged.body_markdown = job.blueprint.body_markdown.clone();
-                }
-                if changed {
-                    job.blueprint = merged;
-                    if job.stage == HarnessStage::Drafting
-                        && (!job.blueprint.slots.is_empty()
-                            || !job.blueprint.body_markdown.trim().is_empty())
-                    {
-                        job.stage = HarnessStage::BlueprintReady;
-                    }
-                }
-            }
-        }
-    }
-}
-
 impl EventSink for HarnessEngine {
     fn on_event(&self, event: AdapterEvent) {
         self.process_adapter_event(event);
@@ -477,9 +202,8 @@ impl EventSink for HarnessEngine {
         arguments: &Value,
     ) -> Result<Value, String> {
         match tool {
-            "creatorx_update_blueprint" => self.tool_update_blueprint(thread_id, turn_id, arguments),
-            "creatorx_render_slot" | "creatorx_generate_image" => {
-                self.tool_render_slot(thread_id, turn_id, arguments)
+            "creatorx_generate_image" | "creatorx_render_slot" => {
+                self.tool_delegate_image(thread_id, turn_id, arguments)
             }
             _ => Err(format!("不支持的 Harness 工具：{tool}")),
         }
@@ -524,11 +248,6 @@ impl HarnessEngine {
                 if job.busy() {
                     job.status = "interrupted".into();
                     job.activity = "上次客户端关闭，可在原任务继续".into();
-                    for slot in &mut job.blueprint.slots {
-                        if slot.status == "running" {
-                            slot.status = "pending".into();
-                        }
-                    }
                     save_job_record(&root, &job)?;
                 }
                 jobs.insert(job.id.clone(), job);
@@ -576,19 +295,17 @@ impl HarnessEngine {
     pub fn create(
         &self,
         store: &LibraryStore,
-        deliverable: DeliverableFormat,
+        mode: &str,
         adapter_id: &str,
-        include_ip: bool,
-        track: String,
         skill_id: &str,
         prompt_ids: Vec<String>,
         brief: String,
     ) -> Result<CreationJob, String> {
-        if deliverable == DeliverableFormat::General {
-            return Err("请选择具体的创作制式：卡片图文、长文配图或视频创作".into());
+        if !["image_text", "video"].contains(&mode) {
+            return Err("创作方向需为 图文(image_text) 或 视频(video)".into());
         }
         if brief.trim().is_empty() || brief.len() > 50_000 || prompt_ids.len() > 16 {
-            return Err("请填写创作想法（不超过 5 万字节，附加提示词最多 16 条）".into());
+            return Err("请填写创作想法（不超过 5 万字节，最多同时引用 16 条提示词）".into());
         }
         let adapter_id = if adapter_id.trim().is_empty() {
             "codex"
@@ -601,20 +318,14 @@ impl HarnessEngine {
             .capabilities
             .contains(&Capability::Planning)
         {
-            return Err("所选 Agent 适配器不支持创作规划对话".into());
+            return Err("所选本地 Agent 适配器不支持创作对话".into());
         }
 
         let id = Uuid::new_v4().to_string();
         let dir = self.0.root.join(&id);
         fs::create_dir(&dir).map_err(|_| "无法创建任务目录")?;
-        let snapshot_dir = dir.join("snapshots/1");
-        let manifest = match store.snapshot_context(
-            include_ip,
-            &track,
-            skill_id,
-            &prompt_ids,
-            &snapshot_dir,
-        ) {
+        let snap_dir = dir.join("snapshots/1");
+        let manifest = match store.snapshot_assets(skill_id, &prompt_ids, &snap_dir) {
             Ok(m) => m,
             Err(e) => {
                 let _ = fs::remove_dir_all(&dir);
@@ -622,11 +333,10 @@ impl HarnessEngine {
             }
         };
 
-        let agents_rule = "# CreatorX Creation Harness 沙盒契约\n\
-            1. 仅在本任务目录工作，严禁修改应用素材库、原 Skill 源目录或其他仓库，不执行任何对外发布或 git push。\n\
-            2. 本轮只读输入快照位于 `snapshots/<最新序号>/`（包含 `ip.md`、`prompts.md`、`skill/SKILL.md` 及 `references/` 参考图）。\n\
-            3. 遵循三阶门禁：先对齐选题立意与真实素材 → 整理结构化蓝图（调用 `creatorx_update_blueprint` 或写入 `blueprint.json` 与 `draft.md`）供用户在右侧工作台确认 → 蓝图确认放行后才按槽位生成产物。\n\
-            4. 产物文件必须写入 `artifacts/` 且不得覆盖任何历史版本。\n";
+        let agents_rule = "# CreatorX Creation Harness 沙盒规则\n\
+            1. 仅在本任务目录内工作，不修改外部仓库或应用样板间，不对外发布或 git push。\n\
+            2. 本轮只读资产快照位于 `snapshots/<最新序号>/`（含用户引用的提示词 `prompts.md`、细粒度 `skill/SKILL.md` 及 `references/` 参考图）。\n\
+            3. 成稿文字或脚本可同步写入 `draft.md` 便于右侧展示与复制；生图或改图通过 `creatorx_generate_image` 交给独立子会话执行，每次保留历史版本。\n";
         if let Err(e) = atomic_save_file(&dir.join("AGENTS.md"), agents_rule.as_bytes()) {
             let _ = fs::remove_dir_all(&dir);
             return Err(e);
@@ -635,20 +345,16 @@ impl HarnessEngine {
         let job = CreationJob {
             parent_id: None,
             source_task_id: None,
-            slot_id: None,
-            revision_note: String::new(),
             id: id.clone(),
             title: brief
                 .lines()
                 .find(|l| !l.trim().is_empty())
-                .unwrap_or(deliverable.label())
+                .unwrap_or(if mode == "video" { "视频创作" } else { "图文创作" })
                 .chars()
                 .take(40)
                 .collect(),
-            deliverable,
+            mode: mode.into(),
             adapter_id: adapter_id.to_string(),
-            include_ip,
-            track: track.trim().into(),
             skill_id: skill_id.into(),
             skill_name: manifest
                 .skill
@@ -657,9 +363,7 @@ impl HarnessEngine {
                 .unwrap_or_default(),
             prompt_ids,
             snapshot_seq: 1,
-            stage: HarnessStage::Drafting,
-            blueprint_approved: false,
-            blueprint: Blueprint::default(),
+            draft_markdown: String::new(),
             thread_id: None,
             turn_id: None,
             status: "idle".into(),
@@ -669,7 +373,6 @@ impl HarnessEngine {
             activity: String::new(),
             updated_at: now_secs(),
         };
-        write_workspace_contract_files(&self.0.root, &job)?;
         self.put(job)?;
         self.continue_chat(&id, brief, None, None)
     }
@@ -691,7 +394,7 @@ impl HarnessEngine {
             .map_err(|_| "正在提交任务，请稍候")?;
         let mut job = self.get(id)?;
         if job.parent_id.is_some() {
-            return Err("子渲染任务不支持直接对话，请在主会话或对应槽位操作".into());
+            return Err("生图子任务不支持直接聊天，请在主会话继续或点击微调".into());
         }
         if job.busy() {
             return Err("当前任务正在执行，请等待完成或停止后再发送".into());
@@ -705,19 +408,11 @@ impl HarnessEngine {
         }
         if let Some((store, next)) = attachments {
             if next.prompt_ids.len() > 16 {
-                return Err("每次最多挂载 16 条风格提示词".into());
+                return Err("最多同时引用 16 条提示词".into());
             }
             let seq = job.snapshot_seq.checked_add(1).ok_or("快照次数超限")?;
             let snap_dir = self.0.root.join(&job.id).join(format!("snapshots/{seq}"));
-            let manifest = store.snapshot_context(
-                next.include_ip,
-                &next.track,
-                &next.skill_id,
-                &next.prompt_ids,
-                &snap_dir,
-            )?;
-            job.include_ip = next.include_ip;
-            job.track = next.track.trim().into();
+            let manifest = store.snapshot_assets(&next.skill_id, &next.prompt_ids, &snap_dir)?;
             job.skill_id = next.skill_id;
             job.skill_name = manifest
                 .skill
@@ -742,43 +437,31 @@ impl HarnessEngine {
 
         let dir = self.0.root.join(&job.id);
         let snap_dir = dir.join(format!("snapshots/{}", job.snapshot_seq));
+        let prompts_md = snap_dir.join("prompts.md");
         let skill_md = snap_dir.join("skill/SKILL.md");
-        let format_guide = match job.deliverable {
-            DeliverableFormat::Cards => {
-                "当前交付制式：【卡片图文】（面向小红书／抖音多图卡片＋短配文）。\n\
-                蓝图要求：`summaryCopy` 填写发布标题与短配文；`slots` 按页列出每张卡片（如 `card-1` 封面、`card-2` 要点页…），`text` 为图内逐字准确文字，`visualPrompt` 为画面构图与角色动作。"
-            }
-            DeliverableFormat::Article => {
-                "当前交付制式：【长文配图】（面向微信公众号深度长文＋封面／文中插图）。\n\
-                蓝图要求：`bodyMarkdown`（及 `draft.md`）填写完整结构化 Markdown 正文，文中需要配图处用 `![图注](slot:fig-1)` 占位；`slots` 列出 `cover`（封面图）与各 `fig-N` 插图的图注与画面构图说明。"
-            }
-            DeliverableFormat::Video => {
-                "当前交付制式：【视频创作】（面向抖音／小红书短视频口播＋分镜）。\n\
-                蓝图要求：`summaryCopy` 填写视频发布文案；`bodyMarkdown`（及 `draft.md`）填写完整口播／旁白逐字稿；`slots` 按镜头列出 `shot-1`..`shot-N`（`text` 为该镜台词，`visualPrompt` 为画面主体与运镜，`durationSec` 为秒数）。"
-            }
-            DeliverableFormat::General => "",
-        };
+        let mode_label = if job.mode == "video" { "视频" } else { "图文" };
 
         let dev_instructions = format!(
-            "你在 CreatorX Creation Harness 中担任主创作协作引擎。\n\
-            {format_guide}\n\
-            硬门禁规则：\n\
-            1. 优先读取当前生效快照目录 `{}`（若存在 `ip.md` 则严格遵循创作者 IP 底座与赛道定位；若存在 `prompts.md` 或 `skill/SKILL.md` 则遵循选定样板规范）。\n\
-            2. 当选题与表达明确后，调用 `creatorx_update_blueprint`（或同步更新任务根目录 `blueprint.json` 与 `draft.md`）把结构化蓝图呈现在右侧工作台。\n\
-            3. 当前蓝图放行状态：`blueprintApproved = {}`。若为 `false`，整理好蓝图后请提示用户在右侧工作台检查并点击「确认蓝图」或直接点槽位生成，切勿在未放行前调用 `creatorx_render_slot`。\n\
-            4. 若蓝图已放行且用户明确要求在对话中生成或微调某个槽位图片，调用 `creatorx_render_slot` 交给独立子会话执行，等待真实文件结果再汇报。",
-            snap_dir.display(),
-            job.blueprint_approved
+            "你在 CreatorX 的「{mode_label}」创作台协助用户组合生文、生图与视频脚本创作。\n\
+            1. 保持简洁直接：用户还在讨论选题或打磨文字时，只做文字交流与定稿整理，不要擅自提前出图；当形成完整定稿文案／长文／分镜脚本时，可将其同步写入本任务根目录 `draft.md` 方便右侧展示复制。\n\
+            2. 本轮生效的资产快照目录为 `{}`：若存在 `prompts.md`（用户勾选的 #Tag 角色、画风或文风提示词）及 `references/` 参考图，请读取并严格沿用；若存在 `skill/SKILL.md`，按其细粒度职责执行。\n\
+            3. 当用户明确要求生成图片或修改已有图片时，调用 `creatorx_generate_image` 把完整意图与逐字文案交给独立生图子会话执行（修改已有图片时传入对应的 `sourceTaskId`），等待真实文件结果返回后再汇报；不把脚本或计划冒充已生成的图片或视频文件。",
+            snap_dir.display()
         );
 
         let context_header = format!(
-            "[Harness 本轮上下文索引] 快照序号=#{}，目录={}，IP底座={}，赛道={}，样板Skill={}，蓝图已确认={}。",
+            "[本轮挂载资产索引] 快照=#{}，提示词文件={}，Skill={}",
             job.snapshot_seq,
-            snap_dir.display(),
-            if snap_dir.join("ip.md").is_file() { "已挂载(ip.md)" } else { "未配置/未挂载" },
-            if job.track.is_empty() { "通用" } else { &job.track },
-            if skill_md.is_file() { job.skill_name.as_str() } else { "未选择" },
-            job.blueprint_approved
+            if prompts_md.is_file() {
+                prompts_md.to_string_lossy().into_owned()
+            } else {
+                "未勾选".into()
+            },
+            if skill_md.is_file() {
+                format!("{} ({})", job.skill_name, skill_md.display())
+            } else {
+                "未选择".into()
+            }
         );
 
         let req = TurnRequest {
@@ -789,7 +472,7 @@ impl HarnessEngine {
             skill_attachment: skill_md
                 .is_file()
                 .then(|| (job.skill_name.clone(), skill_md)),
-            dynamic_tools: harness_dynamic_tools(),
+            dynamic_tools: image_delegation_tools(),
         };
 
         match adapter.start_turn(req, Arc::new(self.clone())) {
@@ -802,7 +485,7 @@ impl HarnessEngine {
                     }
                     if current.status == "starting" {
                         current.status = "running".into();
-                        current.activity = "正在思考与整理…".into();
+                        current.activity = "正在回复…".into();
                     }
                     current.updated_at = now_secs();
                     save_job_record(&self.0.root, current)?;
@@ -814,82 +497,14 @@ impl HarnessEngine {
                 let mut current = self.get(id)?;
                 current.status = "error".into();
                 current.error = Some(err.clone());
-                current.activity = "启动未成功".into();
+                current.activity = "连接未完成".into();
                 self.put(current)?;
                 Err(err)
             }
         }
     }
 
-    pub fn save_blueprint(
-        &self,
-        id: &str,
-        incoming: Blueprint,
-        approve: bool,
-    ) -> Result<CreationJob, String> {
-        let mut job = self.get(id)?;
-        if job.parent_id.is_some() {
-            return Err("子任务没有独立蓝图".into());
-        }
-        let val = serde_json::to_value(&incoming).map_err(|_| "蓝图数据无效")?;
-        let (merged, changed) = merge_blueprint_payload(&job.blueprint, &val)?;
-        if approve && merged.slots.is_empty() && merged.body_markdown.trim().is_empty() {
-            return Err("请先至少添加一个卡片／插图／分镜槽位或正文，再确认蓝图".into());
-        }
-        job.blueprint = merged;
-        if approve {
-            job.blueprint_approved = true;
-            if job.stage == HarnessStage::Drafting {
-                job.stage = HarnessStage::BlueprintReady;
-            }
-        } else if changed && job.stage != HarnessStage::Review {
-            job.blueprint_approved = false;
-            if !job.blueprint.slots.is_empty() || !job.blueprint.body_markdown.trim().is_empty() {
-                job.stage = HarnessStage::BlueprintReady;
-            }
-        }
-        write_workspace_contract_files(&self.0.root, &job)?;
-        self.put(job.clone())?;
-        Ok(job)
-    }
-
-    fn tool_update_blueprint(
-        &self,
-        thread_id: &str,
-        turn_id: &str,
-        arguments: &Value,
-    ) -> Result<Value, String> {
-        let mut parent = self
-            .list()?
-            .into_iter()
-            .find(|j| j.thread_id.as_deref() == Some(thread_id))
-            .ok_or("找不到对应的主创作会话")?;
-        if parent.parent_id.is_some()
-            || !parent.busy()
-            || parent.turn_id.as_deref() != Some(turn_id)
-        {
-            return Err("仅当前执行中的主会话可更新蓝图".into());
-        }
-        let (merged, changed) = merge_blueprint_payload(&parent.blueprint, arguments)?;
-        parent.blueprint = merged;
-        if changed && parent.stage != HarnessStage::Review {
-            parent.blueprint_approved = false;
-        }
-        if parent.stage == HarnessStage::Drafting {
-            parent.stage = HarnessStage::BlueprintReady;
-        }
-        parent.activity = "已同步结构化蓝图到右侧工作台".into();
-        write_workspace_contract_files(&self.0.root, &parent)?;
-        self.put(parent.clone())?;
-        Ok(json!({
-            "ok": true,
-            "slotCount": parent.blueprint.slots.len(),
-            "blueprintApproved": parent.blueprint_approved,
-            "nextStep": "蓝图已呈现在右侧工作台；若尚未确认，请提示用户确认蓝图后再开始按槽位生成。"
-        }))
-    }
-
-    fn tool_render_slot(
+    fn tool_delegate_image(
         &self,
         thread_id: &str,
         turn_id: &str,
@@ -899,91 +514,71 @@ impl HarnessEngine {
             .list()?
             .into_iter()
             .find(|j| j.thread_id.as_deref() == Some(thread_id))
-            .ok_or("主创作会话不存在")?;
+            .ok_or("找不到主创作会话")?;
         if parent.parent_id.is_some()
             || !parent.busy()
             || parent.turn_id.as_deref() != Some(turn_id)
         {
-            return Err("仅当前执行中的主会话可派发槽位渲染".into());
+            return Err("仅当前执行中的主会话可派发生图子任务".into());
         }
-        if !parent.blueprint_approved {
-            return Ok(json!({
-                "ok": false,
-                "gate": "blueprint_unapproved",
-                "message": "蓝图门禁拦截：当前蓝图尚未经用户在右侧工作台点击「确认蓝图」放行。请先结束本轮回复并请用户确认蓝图。"
-            }));
-        }
-        let slot_id = if let Some(s) = arguments.get("slotId").and_then(Value::as_str) {
-            validate_slot_id(s)?
-        } else if let Some(first) = parent.blueprint.slots.first() {
-            first.slot_id.clone()
-        } else {
-            return Err("当前蓝图没有可渲染的槽位".into());
-        };
-        let note = arguments
-            .get("revisionNote")
-            .or_else(|| arguments.get("intent"))
+        let intent = arguments
+            .get("intent")
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
+        let source_task_id = arguments
+            .get("sourceTaskId")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string);
 
-        let worker_id = self.spawn_slot_worker(&parent.id, &slot_id, note, false)?;
+        let worker_id = self.spawn_image_worker(&parent.id, source_task_id, intent.to_string())?;
         let started = std::time::Instant::now();
         loop {
             let worker = self.get(&worker_id)?;
             if !worker.busy() {
-                let refreshed = self.get(&parent.id)?;
-                let slot = refreshed
-                    .blueprint
-                    .slots
-                    .iter()
-                    .find(|s| s.slot_id == slot_id);
                 return Ok(json!({
                     "ok": worker.status == "completed" && worker.error.is_none(),
                     "taskId": worker_id,
-                    "slotId": slot_id,
                     "status": worker.status,
                     "error": worker.error,
-                    "versions": slot.map(|s| &s.versions),
+                    "images": worker.images.iter().map(|p| self.0.root.join(&worker_id).join(p)).collect::<Vec<_>>(),
                 }));
             }
             if started.elapsed() > Duration::from_secs(1800) {
                 let _ = self.cancel(&worker_id);
-                return Err("槽位生图等待超时，已请求停止；请检查状态，不自动重试".into());
+                return Err("生图等待超时，已请求停止；请检查任务状态，不自动重试".into());
             }
             if !self.get(&parent.id)?.busy() {
                 let _ = self.cancel(&worker_id);
-                return Err("主会话已停止，已同步停止子任务".into());
+                return Err("主会话已停止，已同步停止生图子任务".into());
             }
             std::thread::sleep(Duration::from_millis(250));
         }
     }
 
-    pub fn render_slot_from_ui(
+    pub fn spawn_image_worker_from_ui(
         &self,
         parent_id: &str,
-        slot_id: &str,
-        revision_note: String,
+        source_task_id: Option<String>,
+        intent: String,
     ) -> Result<CreationJob, String> {
-        let slot_id = validate_slot_id(slot_id)?;
-        let _ = self.spawn_slot_worker(parent_id, &slot_id, revision_note, true)?;
-        self.get(parent_id)
+        let worker_id = self.spawn_image_worker(parent_id, source_task_id, intent)?;
+        self.get(&worker_id)
     }
 
-    fn spawn_slot_worker(
+    fn spawn_image_worker(
         &self,
         parent_id: &str,
-        slot_id: &str,
-        revision_note: String,
-        approve_from_ui: bool,
+        source_task_id: Option<String>,
+        intent: String,
     ) -> Result<String, String> {
-        let _guard = self.0.dispatch.lock().map_err(|_| "渲染派发正忙")?;
-        let mut parent = self.get(parent_id)?;
-        if parent.parent_id.is_some() {
-            return Err("不能从子任务再次派发槽位任务".into());
+        if intent.trim().is_empty() || intent.len() > 100_000 {
+            return Err("请填写明确的生图或改图说明".into());
         }
-        if !approve_from_ui && !parent.blueprint_approved {
-            return Err("请先确认蓝图后再执行槽位渲染".into());
+        let _guard = self.0.dispatch.lock().map_err(|_| "生图派发正忙")?;
+        let parent = self.get(parent_id)?;
+        if parent.parent_id.is_some() {
+            return Err("不能从子任务再次派发生图任务".into());
         }
         if self
             .list()?
@@ -992,43 +587,29 @@ impl HarnessEngine {
             .count()
             >= 3
         {
-            return Err("最多同时执行 3 个槽位生成任务，请等待当前任务完成".into());
+            return Err("已有 3 个生图任务正在执行，请等待结果".into());
         }
         let adapter = self.0.adapters.get(&parent.adapter_id)?;
         let caps = adapter.status(false).capabilities;
 
-        let slot_idx = parent
-            .blueprint
-            .slots
-            .iter()
-            .position(|s| s.slot_id == slot_id)
-            .ok_or_else(|| format!("蓝图中不存在槽位 {slot_id}"))?;
-        if parent.blueprint.slots[slot_idx].status == "running" {
-            return Err("该槽位正在生成中，请勿重复提交".into());
-        }
-
-        let previous_version = parent.blueprint.slots[slot_idx].versions.last().cloned();
-        if previous_version.is_some() {
+        let source_job = source_task_id
+            .as_deref()
+            .map(|sid| self.get(sid))
+            .transpose()?;
+        if let Some(src) = &source_job {
+            if src.parent_id.as_deref() != Some(parent_id) || src.images.is_empty() || src.busy() {
+                return Err("只能基于当前创作下已完成且包含真实图片的任务进行微调".into());
+            }
             if !caps.contains(&Capability::ImageRevision) {
-                return Err("当前所选 Agent 适配器不支持基于原图微调".into());
+                return Err("当前所选本地 Agent 不支持原图微调".into());
             }
         } else if !caps.contains(&Capability::ImageGeneration) {
-            return Err("当前所选 Agent 适配器不支持原生生图".into());
+            return Err("当前所选本地 Agent 不支持原生生图".into());
         }
-
-        if approve_from_ui {
-            parent.blueprint_approved = true;
-        }
-        parent.stage = HarnessStage::Rendering;
-        parent.blueprint.slots[slot_idx].status = "running".into();
-        parent.blueprint.slots[slot_idx].error = None;
-        let slot_snapshot = parent.blueprint.slots[slot_idx].clone();
-        write_workspace_contract_files(&self.0.root, &parent)?;
-        self.put(parent.clone())?;
 
         let worker_id = Uuid::new_v4().to_string();
         let worker_dir = self.0.root.join(&worker_id);
-        fs::create_dir_all(&worker_dir).map_err(|_| "无法创建槽位渲染沙盒")?;
+        fs::create_dir_all(&worker_dir).map_err(|_| "无法创建生图子任务目录")?;
 
         let parent_dir = self.0.root.join(&parent.id);
         let snap_src = parent_dir.join(format!("snapshots/{}", parent.snapshot_seq));
@@ -1043,86 +624,53 @@ impl HarnessEngine {
         }
 
         let mut prompt_body = format!(
-            "你是 CreatorX 独立槽位生图子会话，只负责渲染槽位 `{}`（{}）。\n\
-            交付制式：{}\n\
-            图内准确文案 / 镜头台词：\n{}\n\n\
-            画面构图与视觉描述：\n{}\n",
-            slot_snapshot.slot_id,
-            slot_snapshot.label,
-            parent.deliverable.label(),
-            if slot_snapshot.text.trim().is_empty() {
-                "（无强制图内文字）"
-            } else {
-                slot_snapshot.text.trim()
-            },
-            if slot_snapshot.visual_prompt.trim().is_empty() {
-                "沿用 IP 底座与样板画风，简洁留白"
-            } else {
-                slot_snapshot.visual_prompt.trim()
-            }
+            "你是独立生图子会话，直接执行以下视觉意图并读取检查实际生成的图片文件；不得再次派生代理，不覆盖任何旧版文件。\n\
+            完整意图：\n{}\n",
+            intent.trim()
         );
-        if worker_dir.join("ip.md").is_file() {
-            prompt_body.push_str("\n请先读取本目录 `ip.md` 及 `references/` 中的标准角色参考图保持形象一致。");
-        }
         if worker_dir.join("prompts.md").is_file() {
-            prompt_body.push_str("\n请同时遵循本目录 `prompts.md` 中的风格样板要求。");
+            prompt_body.push_str(
+                "\n请读取本目录 `prompts.md` 及 `references/` 中的参考图，严格保持角色与画风一致。",
+            );
         }
-        if let Some(prev) = &previous_version {
-            let src_file = parent_dir.join(&prev.path);
-            if !src_file.is_file() {
-                return Err("找不到该槽位的上一版真实原图，拒绝凭空声称改图".into());
+        if let Some(src) = &source_job {
+            let prev_dir = worker_dir.join("previous");
+            fs::create_dir_all(&prev_dir).map_err(|_| "无法准备上一版原图目录")?;
+            for rel in &src.images {
+                let filename = Path::new(rel).file_name().ok_or("原图文件名无效")?;
+                let dest = prev_dir.join(filename);
+                fs::copy(self.0.root.join(&src.id).join(rel), &dest)
+                    .map_err(|_| "无法读取上一版真实原图")?;
+                prompt_body.push_str(&format!(
+                    "\n【基于真实原图微调】必须引用实际上一版图片 `{}` 进行修改，保持其余细节稳定。",
+                    dest.display()
+                ));
             }
-            let ext = src_file
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("png");
-            let dest_prev = worker_dir.join("previous").join(format!("v{}.{ext}", prev.version));
-            atomic_save_file(
-                &dest_prev,
-                &fs::read(&src_file).map_err(|_| "无法读取上一版原图")?,
-            )?;
-            prompt_body.push_str(&format!(
-                "\n\n【原图受控微调】必须引用实际上一版图片 `{}` 进行修改，保持其余构图与主体一致。本轮修改要求：\n{}",
-                dest_prev.display(),
-                if revision_note.trim().is_empty() {
-                    "按最新槽位文案与构图微调细节"
-                } else {
-                    revision_note.trim()
-                }
-            ));
-        } else if !revision_note.trim().is_empty() {
-            prompt_body.push_str(&format!("\n补充生成说明：{}\n", revision_note.trim()));
         }
         prompt_body.push_str(
-            "\n必须调用原生 image_gen / image_generation 工具产出真实图片文件并读取检查；不得使用外部付费 API 或代码绘图冒充。",
+            "\n必须调用原生 image_gen / image_generation 产出真实图片文件；不可用外部付费 API 或代码绘图冒充。",
         );
 
         let skill_md = worker_dir.join("skill/SKILL.md");
         let worker = CreationJob {
             parent_id: Some(parent.id.clone()),
-            source_task_id: previous_version.map(|v| v.task_id),
-            slot_id: Some(slot_id.to_string()),
-            revision_note: revision_note.trim().into(),
+            source_task_id: source_job.map(|s| s.id),
             id: worker_id.clone(),
-            title: format!("{} · {}", slot_snapshot.label, parent.title),
-            deliverable: parent.deliverable,
+            title: intent.trim().chars().take(42).collect(),
+            mode: parent.mode.clone(),
             adapter_id: parent.adapter_id.clone(),
-            include_ip: parent.include_ip,
-            track: parent.track.clone(),
             skill_id: parent.skill_id.clone(),
             skill_name: parent.skill_name.clone(),
             prompt_ids: parent.prompt_ids.clone(),
             snapshot_seq: parent.snapshot_seq,
-            stage: HarnessStage::Rendering,
-            blueprint_approved: true,
-            blueprint: Blueprint::default(),
+            draft_markdown: String::new(),
             thread_id: None,
             turn_id: None,
             status: "starting".into(),
             messages: vec![],
             images: vec![],
             error: None,
-            activity: format!("正在生成 {}", slot_snapshot.label),
+            activity: "正在生成图片…".into(),
             updated_at: now_secs(),
         };
         self.put(worker)?;
@@ -1130,7 +678,7 @@ impl HarnessEngine {
         let req = TurnRequest {
             thread_id: None,
             cwd: worker_dir,
-            developer_instructions: "你是 CreatorX 受控槽位生图子会话。直接按指令使用原生生图工具生成一张高质量图片并核对，不派生其他代理，不修改外部目录。".into(),
+            developer_instructions: "你是受控生图子会话，直接调用原生生图工具完成图片并核对，不修改外部目录。".into(),
             user_messages: vec![prompt_body],
             skill_attachment: skill_md
                 .is_file()
@@ -1158,12 +706,6 @@ impl HarnessEngine {
                 w.status = "error".into();
                 w.error = Some(err.clone());
                 self.put(w)?;
-                let mut p = self.get(parent_id)?;
-                if let Some(s) = p.blueprint.slots.iter_mut().find(|s| s.slot_id == slot_id) {
-                    s.status = "error".into();
-                    s.error = Some(err.clone());
-                }
-                self.put(p)?;
                 Err(err)
             }
         }
@@ -1176,12 +718,6 @@ impl HarnessEngine {
                     for job in jobs.values_mut().filter(|j| j.busy()) {
                         job.status = "interrupted".into();
                         job.error = Some(error.clone());
-                        for slot in &mut job.blueprint.slots {
-                            if slot.status == "running" {
-                                slot.status = "error".into();
-                                slot.error = Some(error.clone());
-                            }
-                        }
                         let _ = save_job_record(&self.0.root, job);
                     }
                 }
@@ -1288,94 +824,44 @@ impl HarnessEngine {
                     .unwrap_or(data.as_str());
                 STANDARD
                     .decode(payload)
-                    .map_err(|_| "生成图片的 Base64 数据无效".to_string())?
+                    .map_err(|_| "生成图片编码无效".to_string())?
             } else {
                 return Err("生图事件未返回可读取的图片文件".into());
             };
-            let ext = validate_image_magic(&bytes)
-                .ok_or_else(|| "生图结果未通过 PNG/JPEG/WebP 文件头硬校验".to_string())?;
+            let ext =
+                validate_image_magic(&bytes).ok_or_else(|| "生图结果未通过有效图片文件头校验".to_string())?;
             Ok((bytes, ext))
         })();
 
         let Ok(mut jobs) = self.0.jobs.lock() else {
             return;
         };
-        let Some(worker_id) = jobs
-            .values()
+        let Some(job) = jobs
+            .values_mut()
             .find(|j| j.thread_id.as_deref() == Some(thread_id))
-            .map(|j| j.id.clone())
         else {
             return;
         };
-
         match raw {
             Err(err) => {
-                if let Some(worker) = jobs.get_mut(&worker_id) {
-                    worker.error = Some(err);
-                    let _ = save_job_record(&self.0.root, worker);
-                }
+                job.error = Some(err);
+                let _ = save_job_record(&self.0.root, job);
             }
             Ok((bytes, ext)) => {
-                let worker_rel = format!("artifacts/{}.{ext}", Uuid::new_v4());
-                if let Err(err) =
-                    atomic_save_file(&self.0.root.join(&worker_id).join(&worker_rel), &bytes)
-                {
-                    if let Some(worker) = jobs.get_mut(&worker_id) {
-                        worker.error = Some(err);
-                    }
+                let next_idx = job.images.len() + 1;
+                let rel = format!("artifacts/v{next_idx}-{}.{ext}", Uuid::new_v4());
+                let dest = self.0.root.join(&job.id).join(&rel);
+                if dest.exists() {
+                    job.error = Some("检测到重复文件名，拒绝覆盖旧图".into());
                     return;
                 }
-                let (parent_id_opt, slot_id_opt, note) = {
-                    let worker = jobs.get_mut(&worker_id).unwrap();
-                    worker.images.push(worker_rel.clone());
-                    worker.updated_at = now_secs();
-                    let _ = save_job_record(&self.0.root, worker);
-                    (
-                        worker.parent_id.clone(),
-                        worker.slot_id.clone(),
-                        worker.revision_note.clone(),
-                    )
-                };
-
-                // Append-only write into parent job's slot version chain (`artifacts/<slot-id>/vN.<ext>`)
-                if let (Some(parent_id), Some(slot_id)) = (parent_id_opt, slot_id_opt) {
-                    if let Some(parent) = jobs.get_mut(&parent_id) {
-                        if let Some(slot) = parent
-                            .blueprint
-                            .slots
-                            .iter_mut()
-                            .find(|s| s.slot_id == slot_id)
-                        {
-                            let next_ver = slot
-                                .versions
-                                .iter()
-                                .map(|v| v.version)
-                                .max()
-                                .unwrap_or(0)
-                                + 1;
-                            let slot_rel = format!("artifacts/{slot_id}/v{next_ver}.{ext}");
-                            let slot_dest = self.0.root.join(&parent_id).join(&slot_rel);
-                            if slot_dest.exists() {
-                                slot.error = Some("检测到同名历史版本文件，拒绝覆盖".into());
-                                return;
-                            }
-                            if let Err(err) = atomic_save_file(&slot_dest, &bytes) {
-                                slot.error = Some(err);
-                                return;
-                            }
-                            slot.versions.push(ArtifactVersion {
-                                version: next_ver,
-                                path: slot_rel.clone(),
-                                task_id: worker_id,
-                                note,
-                                created_at: now_secs(),
-                            });
-                            parent.images.push(slot_rel);
-                            parent.updated_at = now_secs();
-                            let _ = save_job_record(&self.0.root, parent);
-                        }
-                    }
+                if let Err(err) = atomic_save_file(&dest, &bytes) {
+                    job.error = Some(err);
+                    return;
                 }
+                job.images.push(rel);
+                job.updated_at = now_secs();
+                let _ = save_job_record(&self.0.root, job);
             }
         }
     }
@@ -1384,129 +870,68 @@ impl HarnessEngine {
         let Ok(mut jobs) = self.0.jobs.lock() else {
             return;
         };
-        let Some(job_id) = jobs
-            .values()
+        let Some(job) = jobs
+            .values_mut()
             .find(|j| j.thread_id.as_deref() == Some(thread_id))
-            .map(|j| j.id.clone())
         else {
             return;
         };
-
-        let (parent_id_opt, slot_id_opt, final_status, final_error) = {
-            let job = jobs.get_mut(&job_id).unwrap();
-            job.status = status;
-            if let Some(err) = error {
-                job.error = Some(err);
-            }
-            if job.parent_id.is_none() {
-                sync_disk_contract_if_modified(&self.0.root, job);
-            } else if job.status == "completed" && job.images.is_empty() {
-                // Hard Gate #3: verbal completion without a verified image file is a failure.
-                job.status = "error".into();
-                job.error.get_or_insert_with(|| {
-                    "产物硬校验未通过：子会话未产出真实图片文件，该槽位尚未完成".into()
-                });
-            }
-            job.activity = if job.status == "completed" {
-                "已完成".into()
-            } else {
-                "未完成，请查看提示".into()
-            };
-            job.updated_at = now_secs();
-            let _ = write_workspace_contract_files(&self.0.root, job);
-            let _ = save_job_record(&self.0.root, job);
-            (
-                job.parent_id.clone(),
-                job.slot_id.clone(),
-                job.status.clone(),
-                job.error.clone(),
-            )
-        };
-
-        if let (Some(parent_id), Some(slot_id)) = (parent_id_opt, slot_id_opt) {
-            if let Some(parent) = jobs.get_mut(&parent_id) {
-                if let Some(slot) = parent
-                    .blueprint
-                    .slots
-                    .iter_mut()
-                    .find(|s| s.slot_id == slot_id)
-                {
-                    if final_status == "completed" && final_error.is_none() {
-                        slot.status = "completed".into();
-                        slot.error = None;
-                    } else {
-                        slot.status = "error".into();
-                        slot.error = final_error;
-                    }
-                }
-                let any_running = parent.blueprint.slots.iter().any(|s| s.status == "running");
-                let any_completed = parent
-                    .blueprint
-                    .slots
-                    .iter()
-                    .any(|s| !s.versions.is_empty());
-                if !any_running && any_completed {
-                    parent.stage = HarnessStage::Review;
-                }
-                parent.updated_at = now_secs();
-                let _ = save_job_record(&self.0.root, parent);
-            }
+        job.status = status;
+        if let Some(err) = error {
+            job.error = Some(err);
         }
+        if job.parent_id.is_none() {
+            if let Ok(draft) = fs::read_to_string(self.0.root.join(&job.id).join("draft.md")) {
+                if !draft.trim().is_empty() {
+                    job.draft_markdown = draft.chars().take(200_000).collect();
+                }
+            }
+        } else if job.status == "completed" && job.images.is_empty() {
+            job.status = "error".into();
+            job.error.get_or_insert_with(|| {
+                "本轮未收到真实图片文件，尚未完成出图".into()
+            });
+        }
+        job.activity = if job.status == "completed" {
+            "已完成".into()
+        } else {
+            "未完成，可查看提示继续".into()
+        };
+        job.updated_at = now_secs();
+        let _ = save_job_record(&self.0.root, job);
     }
 
     pub fn promote_to_showcase(
         &self,
         store: &LibraryStore,
-        job_id: &str,
         req: PromoteShowcaseRequest,
     ) -> Result<Entry, String> {
-        let job = self.get(job_id)?;
-        if job.parent_id.is_some() {
-            return Err("请从主创作任务提炼样板".into());
-        }
-        let job_dir = self.0.root.join(&job.id);
+        let target = self.get(&req.target_job_id)?;
+        let dir = self.0.root.join(&target.id);
         let mut image_hashes = Vec::new();
-        for slot in &job.blueprint.slots {
-            if !req.slot_ids.is_empty() && !req.slot_ids.contains(&slot.slot_id) {
-                continue;
-            }
-            if let Some(latest) = slot.versions.last() {
-                let bytes = fs::read(job_dir.join(&latest.path))
-                    .map_err(|_| "无法读取成品原图以提炼样板")?;
-                let hash_name = store.import_image_bytes(&bytes)?;
-                if !image_hashes.contains(&hash_name) && image_hashes.len() < 16 {
-                    image_hashes.push(hash_name);
-                }
+        for rel in &target.images {
+            let bytes = fs::read(dir.join(rel)).map_err(|_| "无法读取作品原图以存为样板")?;
+            let hash_name = store.import_image_bytes(&bytes)?;
+            if !image_hashes.contains(&hash_name) && image_hashes.len() < 16 {
+                image_hashes.push(hash_name);
             }
         }
-        let fallback_output = if !req.sample_output.trim().is_empty() {
-            req.sample_output
-        } else if !job.blueprint.body_markdown.trim().is_empty() {
-            job.blueprint
-                .body_markdown
-                .chars()
-                .take(4_000)
-                .collect::<String>()
+        let sample = if !req.sample.trim().is_empty() {
+            req.sample
+        } else if !target.draft_markdown.trim().is_empty() {
+            target.draft_markdown.chars().take(2_000).collect()
         } else {
-            job.blueprint.summary_copy.clone()
+            String::new()
         };
         let entry = Entry {
-            schema_version: 3,
+            schema_version: 4,
             id: String::new(),
             kind: Kind::Prompt,
+            modality: req.modality,
             name: req.name.trim().into(),
             prompt: req.prompt,
-            category: req.category.trim().into(),
-            deliverable: job.deliverable,
-            track: job.track.clone(),
-            maturity: Maturity::Showcase,
-            sample_input: if req.sample_input.trim().is_empty() {
-                job.title.clone()
-            } else {
-                req.sample_input
-            },
-            sample_output: fallback_output,
-            tags: vec![],
+            sample,
+            tags: req.tags,
             notes: req.notes,
             origin_created_at: None,
             origin_updated_at: None,
@@ -1515,7 +940,7 @@ impl HarnessEngine {
             images: image_hashes,
             revision: 0,
             updated_at: 0,
-            source: Some(format!("提炼自创作任务 {}", job.title)),
+            source: Some(format!("沉淀自创作：{}", target.title)),
         };
         store.save(entry, 0, None)
     }
@@ -1573,7 +998,7 @@ impl HarnessEngine {
             ]
             .contains(&extension.as_str())
         {
-            return Err("不能打开此类型或任务沙盒以外的文件".into());
+            return Err("不能打开此类型或任务以外的文件".into());
         }
         #[cfg(target_os = "macos")]
         let mut command = Command::new("/usr/bin/open");
@@ -1623,10 +1048,8 @@ pub async fn creation_directory(
 pub async fn creation_start(
     app: tauri::AppHandle,
     engine: tauri::State<'_, HarnessEngine>,
-    deliverable: DeliverableFormat,
+    mode: String,
     adapter_id: Option<String>,
-    include_ip: Option<bool>,
-    track: Option<String>,
     skill_id: Option<String>,
     prompt_ids: Vec<String>,
     brief: String,
@@ -1635,10 +1058,8 @@ pub async fn creation_start(
     tauri::async_runtime::spawn_blocking(move || {
         engine.create(
             app.state::<LibraryStore>().inner(),
-            deliverable,
+            &mode,
             adapter_id.as_deref().unwrap_or("codex"),
-            include_ip.unwrap_or(true),
-            track.unwrap_or_default(),
             &skill_id.unwrap_or_default(),
             prompt_ids,
             brief,
@@ -1672,25 +1093,15 @@ pub async fn creation_continue(
 }
 
 #[tauri::command]
-pub async fn creation_save_blueprint(
+pub async fn creation_revise_image(
     engine: tauri::State<'_, HarnessEngine>,
-    id: String,
-    blueprint: Blueprint,
-    approve: bool,
-) -> Result<CreationJob, String> {
-    engine.save_blueprint(&id, blueprint, approve)
-}
-
-#[tauri::command]
-pub async fn creation_render_slot(
-    engine: tauri::State<'_, HarnessEngine>,
-    id: String,
-    slot_id: String,
-    revision_note: Option<String>,
+    parent_id: String,
+    source_task_id: Option<String>,
+    intent: String,
 ) -> Result<CreationJob, String> {
     let engine = engine.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        engine.render_slot_from_ui(&id, &slot_id, revision_note.unwrap_or_default())
+        engine.spawn_image_worker_from_ui(&parent_id, source_task_id, intent)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1700,11 +1111,10 @@ pub async fn creation_render_slot(
 pub async fn creation_promote_showcase(
     app: tauri::AppHandle,
     engine: tauri::State<'_, HarnessEngine>,
-    id: String,
     request: PromoteShowcaseRequest,
 ) -> Result<Entry, String> {
     let store = app.state::<LibraryStore>();
-    engine.promote_to_showcase(store.inner(), &id, request)
+    engine.promote_to_showcase(store.inner(), request)
 }
 
 #[tauri::command]
@@ -1731,7 +1141,6 @@ pub async fn creation_open_file(
 mod tests {
     use super::*;
     use crate::adapters::{AgentAdapter, StartedTurn};
-    use crate::library::IpFoundation;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct MockAdapter {
@@ -1800,7 +1209,7 @@ mod tests {
                 sink.on_event(AdapterEvent::MessageCompleted {
                     thread_id: bg_thread_id.clone(),
                     item_id: format!("msg-{seq}"),
-                    text: "已完成本轮处理".into(),
+                    text: "处理完成".into(),
                 });
                 sink.on_event(AdapterEvent::TurnCompleted {
                     thread_id: bg_thread_id,
@@ -1822,13 +1231,7 @@ mod tests {
     fn wait_idle(engine: &HarnessEngine, id: &str) -> CreationJob {
         for _ in 0..100 {
             let job = engine.get(id).unwrap();
-            if !job.busy()
-                && job
-                    .blueprint
-                    .slots
-                    .iter()
-                    .all(|s| s.status != "running")
-            {
+            if !job.busy() {
                 return job;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -1837,22 +1240,32 @@ mod tests {
     }
 
     #[test]
-    fn harness_enforces_immutable_snapshots_blueprint_gate_version_chain_and_showcase_promotion() {
+    fn harness_preserves_tag_snapshots_original_images_on_revision_and_promotes_to_showcase() {
         let root = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(root.path().join("library")).unwrap();
-        store
-            .save_ip(
-                IpFoundation {
-                    name: "安静".into(),
-                    visual_prompt: "蛋黄黄乱发、黑卫衣、粗蜡笔纸纹".into(),
+        let anjing_prompt = store
+            .save(
+                Entry {
+                    schema_version: 4,
+                    id: String::new(),
+                    kind: Kind::Prompt,
+                    modality: Modality::Image,
+                    name: "安静角色视觉".into(),
+                    prompt: "蛋黄黄乱发、黑卫衣、粗蜡笔纸纹".into(),
+                    sample: String::new(),
+                    tags: vec!["安静".into(), "生图".into()],
+                    notes: String::new(),
+                    origin_created_at: None,
+                    origin_updated_at: None,
+                    skill_markdown: String::new(),
+                    skill_digest: None,
                     images: vec![],
-                    voice_prompt: "直白克制".into(),
-                    voice_sample: String::new(),
-                    tracks: vec![],
                     revision: 0,
                     updated_at: 0,
+                    source: None,
                 },
                 0,
+                None,
             )
             .unwrap();
 
@@ -1862,170 +1275,102 @@ mod tests {
         let created = engine
             .create(
                 &store,
-                DeliverableFormat::Cards,
+                "image_text",
                 "mock",
-                true,
-                "计算机".into(),
-                "builtin:cards-series",
-                vec![],
-                "拆解 Creation Harness 是什么".into(),
+                "builtin:image-single",
+                vec![anjing_prompt.id.clone()],
+                "做一期零拷贝图文".into(),
             )
             .unwrap();
-        let job = wait_idle(&engine, &created.id);
-        assert_eq!(job.snapshot_seq, 1);
+        let parent = wait_idle(&engine, &created.id);
+        assert_eq!(parent.snapshot_seq, 1);
         let snap1 = root
             .path()
             .join("creations")
-            .join(&job.id)
-            .join("snapshots/1/ip.md");
+            .join(&parent.id)
+            .join("snapshots/1/prompts.md");
         assert!(snap1.is_file());
 
-        // Switching attachments creates Snapshot #2 without overwriting Snapshot #1
+        // Switching skill mid-chat creates Snapshot #2 without overwriting Snapshot #1
         engine
             .continue_chat(
-                &job.id,
-                "补充一点细节".into(),
+                &parent.id,
+                "准备出套图".into(),
                 Some((
                     &store,
                     AttachmentsUpdate {
-                        include_ip: true,
-                        track: "金融".into(),
-                        skill_id: "builtin:image-single".into(),
-                        prompt_ids: vec![],
+                        skill_id: "builtin:image-series".into(),
+                        prompt_ids: vec![anjing_prompt.id],
                     },
                 )),
                 None,
             )
             .unwrap();
-        let job = wait_idle(&engine, &job.id);
-        assert_eq!(job.snapshot_seq, 2);
+        let parent = wait_idle(&engine, &parent.id);
+        assert_eq!(parent.snapshot_seq, 2);
         assert!(snap1.is_file());
-        assert!(root
-            .path()
-            .join("creations")
-            .join(&job.id)
-            .join("snapshots/2/skill/SKILL.md")
-            .is_file());
 
-        // Save unapproved blueprint -> internal render without approval must be rejected
-        let bp = Blueprint {
-            summary_copy: "Harness 核心三件事".into(),
-            body_markdown: String::new(),
-            slots: vec![BlueprintSlot {
-                slot_id: "card-1".into(),
-                label: "第 1 页 · 封面".into(),
-                text: "不做新 Agent，做创作治具".into(),
-                visual_prompt: "安静站在架构白板前".into(),
-                duration_sec: None,
-                status: "pending".into(),
-                error: None,
-                versions: vec![],
-            }],
-        };
-        let saved = engine.save_blueprint(&job.id, bp, false).unwrap();
-        assert!(!saved.blueprint_approved);
-        assert!(engine
-            .spawn_slot_worker(&job.id, "card-1", String::new(), false)
-            .is_err());
-
-        // Render from UI approves blueprint and produces v1.png; revising produces v2.png without overwriting v1.png
-        engine
-            .render_slot_from_ui(&job.id, "card-1", String::new())
+        // Spawn first image worker -> produces verified image
+        let v1_worker = engine
+            .spawn_image_worker_from_ui(&parent.id, None, "画封面：安静在黑板前".into())
             .unwrap();
-        let after_v1 = wait_idle(&engine, &job.id);
-        assert_eq!(after_v1.stage, HarnessStage::Review);
-        assert_eq!(after_v1.blueprint.slots[0].versions.len(), 1);
-        let v1_path = root
+        let v1_done = wait_idle(&engine, &v1_worker.id);
+        assert_eq!(v1_done.images.len(), 1);
+        let v1_file = root
             .path()
             .join("creations")
-            .join(&job.id)
-            .join(&after_v1.blueprint.slots[0].versions[0].path);
-        assert!(v1_path.is_file());
+            .join(&v1_done.id)
+            .join(&v1_done.images[0]);
+        let v1_bytes = fs::read(&v1_file).unwrap();
 
-        engine
-            .render_slot_from_ui(&job.id, "card-1", "标题加大一点".into())
+        // Spawn revision worker referencing v1_done -> preserves v1_file untouched and creates new image
+        let v2_worker = engine
+            .spawn_image_worker_from_ui(
+                &parent.id,
+                Some(v1_done.id.clone()),
+                "把标题改短一点".into(),
+            )
             .unwrap();
-        let after_v2 = wait_idle(&engine, &job.id);
-        assert_eq!(after_v2.blueprint.slots[0].versions.len(), 2);
-        let v2_path = root
-            .path()
-            .join("creations")
-            .join(&job.id)
-            .join(&after_v2.blueprint.slots[0].versions[1].path);
-        assert!(v1_path.is_file(), "v1 must never be overwritten or deleted");
-        assert!(v2_path.is_file());
-        assert_ne!(v1_path, v2_path);
+        let v2_done = wait_idle(&engine, &v2_worker.id);
+        assert_eq!(v2_done.source_task_id.as_deref(), Some(v1_done.id.as_str()));
+        assert_eq!(v2_done.images.len(), 1);
+        assert_eq!(fs::read(&v1_file).unwrap(), v1_bytes);
 
-        // Showcase promotion writes verified image + metadata back into LibraryStore
+        // Promote v2_done straight back to Showcase with tags
         let promoted = engine
             .promote_to_showcase(
                 &store,
-                &job.id,
                 PromoteShowcaseRequest {
-                    name: "架构拆解封面样板".into(),
-                    category: "视觉画风".into(),
-                    prompt: "暖米白纸纹、粗蜡笔黑卫衣角色站白板旁".into(),
-                    sample_input: String::new(),
-                    sample_output: String::new(),
-                    notes: "实测有效".into(),
-                    slot_ids: vec!["card-1".into()],
+                    target_job_id: v2_done.id,
+                    modality: Modality::Image,
+                    name: "安静黑板科普封面".into(),
+                    prompt: "安静站在黑板前讲解零拷贝，暖米白纸纹粗蜡笔".into(),
+                    sample: String::new(),
+                    tags: vec!["安静".into(), "计算机".into()],
+                    notes: String::new(),
                 },
             )
             .unwrap();
-        assert_eq!(promoted.maturity, Maturity::Showcase);
         assert_eq!(promoted.images.len(), 1);
-        assert_eq!(store.list().unwrap().entries.len(), 1);
+        assert_eq!(promoted.tags, vec!["安静", "计算机"]);
     }
 
     #[test]
-    fn missing_worker_image_fails_artifact_verification_honestly() {
+    fn missing_worker_image_fails_honestly() {
         let root = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(root.path().join("library")).unwrap();
         let registry = AdapterRegistry::with_adapters(vec![Arc::new(MockAdapter::new(false))]);
         let engine = HarnessEngine::with_registry(root.path().join("creations"), registry).unwrap();
 
         let created = engine
-            .create(
-                &store,
-                DeliverableFormat::Article,
-                "mock",
-                false,
-                String::new(),
-                "builtin:article-illustrated",
-                vec![],
-                "写一篇架构文章".into(),
-            )
+            .create(&store, "image_text", "mock", "", vec![], "测试".into())
             .unwrap();
-        let job = wait_idle(&engine, &created.id);
-        engine
-            .save_blueprint(
-                &job.id,
-                Blueprint {
-                    summary_copy: String::new(),
-                    body_markdown: "# 标题\n\n![封面](slot:cover)".into(),
-                    slots: vec![BlueprintSlot {
-                        slot_id: "cover".into(),
-                        label: "封面图".into(),
-                        text: String::new(),
-                        visual_prompt: "简洁插画".into(),
-                        duration_sec: None,
-                        status: "pending".into(),
-                        error: None,
-                        versions: vec![],
-                    }],
-                },
-                true,
-            )
+        let parent = wait_idle(&engine, &created.id);
+        let worker = engine
+            .spawn_image_worker_from_ui(&parent.id, None, "生一张图".into())
             .unwrap();
-        engine
-            .render_slot_from_ui(&job.id, "cover", String::new())
-            .unwrap();
-        let failed = wait_idle(&engine, &job.id);
-        assert_eq!(failed.blueprint.slots[0].status, "error");
-        assert!(failed.blueprint.slots[0]
-            .error
-            .as_deref()
-            .unwrap_or("")
-            .contains("未产出真实图片文件"));
+        let failed = wait_idle(&engine, &worker.id);
+        assert_eq!(failed.status, "error");
+        assert!(failed.error.unwrap_or_default().contains("真实图片文件"));
     }
 }

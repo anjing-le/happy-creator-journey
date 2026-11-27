@@ -12,10 +12,7 @@ use std::{
 use uuid::Uuid;
 
 fn current_schema() -> u32 {
-    3
-}
-fn default_category() -> String {
-    String::new()
+    4
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -29,96 +26,40 @@ pub enum Kind {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum DeliverableFormat {
+pub enum Modality {
+    #[serde(alias = "writing", alias = "article")]
+    Text,
     #[default]
-    General,
-    #[serde(alias = "image")]
-    Cards,
-    #[serde(alias = "writing")]
-    Article,
+    #[serde(alias = "cards", alias = "general")]
+    Image,
     Video,
 }
 
-impl DeliverableFormat {
+impl Modality {
     pub fn label(self) -> &'static str {
         match self {
-            Self::General => "通用",
-            Self::Cards => "卡片图文",
-            Self::Article => "长文配图",
-            Self::Video => "视频创作",
+            Self::Text => "文",
+            Self::Image => "图",
+            Self::Video => "视频",
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Maturity {
-    #[default]
-    Showcase,
-    Draft,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Track {
-    pub name: String,
-    #[serde(default)]
-    pub positioning: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct IpFoundation {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub visual_prompt: String,
-    #[serde(default)]
-    pub images: Vec<String>,
-    #[serde(default)]
-    pub voice_prompt: String,
-    #[serde(default)]
-    pub voice_sample: String,
-    #[serde(default)]
-    pub tracks: Vec<Track>,
-    #[serde(default)]
-    pub revision: u64,
-    #[serde(default)]
-    pub updated_at: u64,
-}
-
-impl IpFoundation {
-    pub fn is_configured(&self) -> bool {
-        !self.name.trim().is_empty()
-            || !self.visual_prompt.trim().is_empty()
-            || !self.voice_prompt.trim().is_empty()
-            || !self.images.is_empty()
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Entry {
     #[serde(default = "current_schema")]
     pub schema_version: u32,
     #[serde(default)]
     pub id: String,
     pub kind: Kind,
+    #[serde(default)]
+    pub modality: Modality,
     pub name: String,
     #[serde(default)]
     pub prompt: String,
-    #[serde(default = "default_category")]
-    pub category: String,
-    #[serde(default)]
-    pub deliverable: DeliverableFormat,
-    #[serde(default)]
-    pub track: String,
-    #[serde(default)]
-    pub maturity: Maturity,
-    #[serde(default)]
-    pub sample_input: String,
-    #[serde(default)]
-    pub sample_output: String,
+    #[serde(default, alias = "sampleOutput")]
+    pub sample: String,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -144,19 +85,14 @@ pub struct Entry {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Library {
-    pub ip: IpFoundation,
     pub entries: Vec<Entry>,
     pub image_directory: String,
-    pub categories: Vec<String>,
-    pub tracks: Vec<String>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotManifest {
-    pub include_ip: bool,
-    pub ip: Option<IpFoundation>,
-    pub track: String,
     pub skill: Option<Entry>,
     pub prompts: Vec<Entry>,
     pub references: Vec<String>,
@@ -184,7 +120,7 @@ pub struct LibraryStore {
 
 impl LibraryStore {
     fn lock(&self) -> Result<(std::sync::MutexGuard<'_, ()>, fs::File), String> {
-        let guard = self.lock.lock().map_err(|_| "素材库正忙，请重试")?;
+        let guard = self.lock.lock().map_err(|_| "样板间正忙，请重试")?;
         let mut options = fs::OpenOptions::new();
         options.create(true).read(true).write(true).truncate(false);
         #[cfg(unix)]
@@ -194,20 +130,20 @@ impl LibraryStore {
         }
         let file = options
             .open(self.root.join(".lock"))
-            .map_err(|_| "无法锁定素材库")?;
-        file.lock().map_err(|_| "无法锁定素材库")?;
+            .map_err(|_| "无法锁定样板间")?;
+        file.lock().map_err(|_| "无法锁定样板间")?;
         Ok((guard, file))
     }
 
     pub fn new(root: PathBuf) -> Result<Self, String> {
-        fs::create_dir_all(root.join("entries")).map_err(|_| "无法创建素材目录")?;
+        fs::create_dir_all(root.join("entries")).map_err(|_| "无法创建样板目录")?;
         fs::create_dir_all(root.join("images")).map_err(|_| "无法创建图片目录")?;
         fs::create_dir_all(root.join("skills")).map_err(|_| "无法创建 Skills 目录")?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
-                .map_err(|_| "无法保护素材目录")?;
+                .map_err(|_| "无法保护样板目录")?;
         }
         let store = Self {
             root,
@@ -234,14 +170,14 @@ impl LibraryStore {
                 .bytes()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
         {
-            return Err("素材标识无效".into());
+            return Err("资产标识无效".into());
         }
         Ok(self.root.join("entries").join(format!("{id}.json")))
     }
 
     fn validate_image_refs(&self, images: &[String]) -> Result<(), String> {
         if images.len() > 16 {
-            return Err("每份资产最多保存 16 张样板或参考图".into());
+            return Err("每份样板最多保存 16 张图片".into());
         }
         for name in images {
             let (hash, extension) = name.rsplit_once('.').ok_or("图片标识无效")?;
@@ -260,32 +196,30 @@ impl LibraryStore {
                     .file_type()
                     .is_symlink()
             {
-                return Err("参考图片不存在".into());
+                return Err("样板或参考图片不存在".into());
             }
         }
         Ok(())
     }
 
     fn validate(&self, entry: &Entry) -> Result<(), String> {
-        if ![1, 2, 3].contains(&entry.schema_version) {
-            return Err("素材版本暂不支持".into());
+        if ![1, 2, 3, 4].contains(&entry.schema_version) {
+            return Err("资产版本暂不支持".into());
         }
         if entry.name.trim().is_empty() || entry.name.chars().count() > 80 {
             return Err("请填写不超过 80 字的名称".into());
         }
         if entry.prompt.len() > 64_000 || entry.skill_markdown.len() > 256_000 {
-            return Err("规则文档过长".into());
+            return Err("正文文档过长".into());
         }
-        if entry.sample_input.len() > 16_000 || entry.sample_output.len() > 32_000 {
-            return Err("样板示例文本过长".into());
+        if entry.sample.len() > 32_000 {
+            return Err("样板文字示例过长".into());
         }
-        if entry.category.chars().count() > 80
-            || entry.track.chars().count() > 40
-            || entry.tags.len() > 20
-            || entry.tags.iter().any(|tag| tag.chars().count() > 40)
+        if entry.tags.len() > 24
+            || entry.tags.iter().any(|tag| tag.chars().count() > 32)
             || entry.notes.len() > 16_000
         {
-            return Err("分类、赛道、标签或备注过长".into());
+            return Err("标签或备注过长（最多 24 个标签，单标签不超过 32 字）".into());
         }
         if entry
             .origin_created_at
@@ -303,7 +237,7 @@ impl LibraryStore {
             .as_ref()
             .is_some_and(|source| source.len() > 4096)
         {
-            return Err("素材来源说明过长".into());
+            return Err("来源说明过长".into());
         }
         if entry.kind == Kind::Prompt && !entry.skill_markdown.is_empty()
             || entry.kind == Kind::Skill && !entry.prompt.is_empty()
@@ -313,175 +247,18 @@ impl LibraryStore {
         self.validate_image_refs(&entry.images)
     }
 
-    fn validate_ip(&self, ip: &IpFoundation) -> Result<(), String> {
-        if ip.name.chars().count() > 80 {
-            return Err("IP 名称不超过 80 字".into());
-        }
-        if ip.visual_prompt.len() > 32_000 || ip.voice_prompt.len() > 32_000 {
-            return Err("IP 视觉或口吻设定过长".into());
-        }
-        if ip.voice_sample.len() > 16_000 {
-            return Err("IP 表达样例过长".into());
-        }
-        if ip.tracks.len() > 32 {
-            return Err("赛道数量不超过 32 个".into());
-        }
-        for track in &ip.tracks {
-            if track.name.trim().is_empty() || track.name.chars().count() > 40 {
-                return Err("赛道名称需为 1–40 字".into());
-            }
-            if track.positioning.chars().count() > 500 {
-                return Err("赛道定位说明不超过 500 字".into());
-            }
-        }
-        self.validate_image_refs(&ip.images)
-    }
-
-    fn read_ip_unlocked(&self) -> Result<IpFoundation, String> {
-        let path = self.root.join("ip.json");
-        if !path.exists() {
-            return Ok(IpFoundation::default());
-        }
-        let ip: IpFoundation =
-            serde_json::from_slice(&fs::read(path).map_err(|_| "无法读取 IP 底座")?)
-                .map_err(|_| "IP 底座记录损坏")?;
-        self.validate_ip(&ip)?;
-        Ok(ip)
-    }
-
-    pub fn get_ip(&self) -> Result<IpFoundation, String> {
-        let _guard = self.lock()?;
-        self.read_ip_unlocked()
-    }
-
-    pub fn save_ip(
-        &self,
-        mut ip: IpFoundation,
-        expected_revision: u64,
-    ) -> Result<IpFoundation, String> {
-        let _guard = self.lock()?;
-        let current = self.read_ip_unlocked()?;
-        if current.revision != expected_revision {
-            return Err("IP 底座已在其他位置修改，请刷新后再保存".into());
-        }
-        ip.name = ip.name.trim().into();
-        let mut seen = std::collections::HashSet::new();
-        ip.tracks = ip
-            .tracks
-            .into_iter()
-            .map(|t| Track {
-                name: t.name.trim().into(),
-                positioning: t.positioning.trim().into(),
-            })
-            .filter(|t| !t.name.is_empty() && seen.insert(t.name.clone()))
-            .collect();
-        self.validate_ip(&ip)?;
-        ip.revision = current.revision.checked_add(1).ok_or("修订号无效")?;
-        ip.updated_at = Self::now_secs()?;
-        self.atomic_write(
-            &self.root.join("ip.json"),
-            &serde_json::to_vec_pretty(&ip).map_err(|_| "无法保存 IP 底座")?,
-        )?;
-        Ok(ip)
-    }
-
-    fn category_names(&self) -> Result<Vec<String>, String> {
-        let path = self.root.join("categories.json");
-        if !path.exists() {
-            return Ok(vec![]);
-        }
-        let categories: Vec<String> =
-            serde_json::from_slice(&fs::read(path).map_err(|_| "无法读取分类")?)
-                .map_err(|_| "分类文件损坏")?;
-        if categories.len() > 500
-            || categories
-                .iter()
-                .any(|s| s.trim().is_empty() || s.chars().count() > 80)
-        {
-            return Err("分类文件格式无效".into());
-        }
-        Ok(categories)
-    }
-
-    pub fn add_category(&self, name: &str) -> Result<Vec<String>, String> {
-        let _guard = self.lock()?;
-        let name = name.trim();
-        if name.is_empty() || name.chars().count() > 80 {
-            return Err("分类名需要 1–80 字".into());
-        }
-        let mut categories = self.category_names()?;
-        if !categories.iter().any(|category| category == name) {
-            if categories.len() >= 500 {
-                return Err("分类数量过多".into());
-            }
-            categories.push(name.into());
-            self.atomic_write(
-                &self.root.join("categories.json"),
-                &serde_json::to_vec_pretty(&categories).map_err(|_| "无法整理分类")?,
-            )?;
-        }
-        Ok(categories)
-    }
-
-    pub fn move_category(&self, id: &str, revision: u64, category: &str) -> Result<Entry, String> {
-        let _guard = self.lock()?;
-        let path = self.entry_path(id)?;
-        let mut entry: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "素材不存在")?)
-            .map_err(|_| "素材记录损坏")?;
-        if entry.revision != revision {
-            return Err("素材已被修改，请刷新后再移动".into());
-        }
-        let category = category.trim();
-        if !category.is_empty() && !self.category_names()?.iter().any(|c| c == category) {
-            return Err("分类不存在，请先新增分类".into());
-        }
-        entry.category = category.into();
-        entry.revision = entry.revision.checked_add(1).ok_or("修订号无效")?;
-        self.atomic_write(
-            &path,
-            &serde_json::to_vec_pretty(&entry).map_err(|_| "无法整理素材")?,
-        )?;
-        self.hydrate_skill(&mut entry)?;
-        Ok(entry)
-    }
-
-    pub fn clear_categories(&self) -> Result<usize, String> {
-        let _guard = self.lock()?;
-        let mut count = 0;
-        for file in fs::read_dir(self.root.join("entries")).map_err(|_| "无法读取素材")? {
-            let path = file.map_err(|_| "无法读取素材")?.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-            let mut entry: Entry =
-                serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取素材")?)
-                    .map_err(|_| "素材记录损坏")?;
-            if !entry.category.is_empty() {
-                entry.category.clear();
-                entry.revision = entry.revision.checked_add(1).ok_or("修订号无效")?;
-                self.atomic_write(
-                    &path,
-                    &serde_json::to_vec_pretty(&entry).map_err(|_| "无法整理素材")?,
-                )?;
-                count += 1;
-            }
-        }
-        self.atomic_write(&self.root.join("categories.json"), b"[]")?;
-        Ok(count)
-    }
-
     pub fn delete_entry(&self, id: &str, expected_revision: u64) -> Result<(), String> {
         let _guard = self.lock()?;
         let path = self.entry_path(id)?;
         if !path.is_file() {
-            return Err("素材不存在".into());
+            return Err("样板不存在".into());
         }
-        let entry: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取素材")?)
-            .map_err(|_| "素材记录损坏")?;
+        let entry: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取样板")?)
+            .map_err(|_| "样板记录损坏")?;
         if entry.revision != expected_revision {
-            return Err("素材已在其他位置修改，请刷新后再删除".into());
+            return Err("样板已在其他位置修改，请刷新后再删除".into());
         }
-        fs::remove_file(&path).map_err(|_| "无法删除素材记录")?;
+        fs::remove_file(&path).map_err(|_| "无法删除样板记录")?;
         if entry.kind == Kind::Skill {
             let dir = self.skill_path(id)?;
             if dir.exists() {
@@ -491,10 +268,8 @@ impl LibraryStore {
         Ok(())
     }
 
-    pub fn snapshot_context(
+    pub fn snapshot_assets(
         &self,
-        include_ip: bool,
-        track: &str,
         skill_id: &str,
         prompt_ids: &[String],
         destination: &Path,
@@ -503,23 +278,17 @@ impl LibraryStore {
         fs::create_dir_all(destination).map_err(|_| "无法创建快照目录")?;
         let read = |id: &str| -> Result<Entry, String> {
             let mut entry: Entry =
-                serde_json::from_slice(&fs::read(self.entry_path(id)?).map_err(|_| "素材不存在")?)
-                    .map_err(|_| "素材记录损坏")?;
+                serde_json::from_slice(&fs::read(self.entry_path(id)?).map_err(|_| "样板不存在")?)
+                    .map_err(|_| "样板记录损坏")?;
             self.hydrate_skill(&mut entry)?;
             self.validate(&entry)?;
             Ok(entry)
-        };
-        let ip = if include_ip {
-            let current = self.read_ip_unlocked()?;
-            current.is_configured().then_some(current)
-        } else {
-            None
         };
         let skill = if skill_id.is_empty() {
             None
         } else {
             let entry = if skill_id.starts_with("builtin:") {
-                crate::builtin_skills::get(skill_id).ok_or("内置样板 Skill 不存在")?
+                crate::builtin_skills::get(skill_id).ok_or("内置 Skill 不存在")?
             } else {
                 read(skill_id)?
             };
@@ -541,11 +310,12 @@ impl LibraryStore {
             }
             Some(entry)
         };
+
         let mut prompts = Vec::new();
         for id in prompt_ids {
             let entry = read(id)?;
             if entry.kind != Kind::Prompt {
-                return Err("附加素材应为提示词".into());
+                return Err("附加引用应为提示词".into());
             }
             prompts.push(entry);
         }
@@ -553,80 +323,56 @@ impl LibraryStore {
         let refs_dir = destination.join("references");
         fs::create_dir_all(&refs_dir).map_err(|_| "无法创建参考图目录")?;
         let mut references = Vec::new();
-        let mut copy_ref = |name: &str| -> Result<(), String> {
-            if !references.iter().any(|existing| existing == name) {
-                self.atomic_write(
-                    &refs_dir.join(name),
-                    &fs::read(self.root.join("images").join(name)).map_err(|_| "无法读取参考图")?,
-                )?;
-                references.push(name.to_string());
-            }
-            Ok(())
-        };
-        if let Some(ip_ref) = &ip {
-            for name in &ip_ref.images {
-                copy_ref(name)?;
-            }
-            let mut ip_doc = format!("# IP 底座：{}\n\n", ip_ref.name);
-            if !track.trim().is_empty() {
-                ip_doc.push_str(&format!("## 本次创作赛道：{}\n", track.trim()));
-                if let Some(found) = ip_ref.tracks.iter().find(|t| t.name == track.trim()) {
-                    if !found.positioning.is_empty() {
-                        ip_doc.push_str(&format!("{}\n", found.positioning));
-                    }
-                }
-                ip_doc.push('\n');
-            }
-            if !ip_ref.visual_prompt.trim().is_empty() {
-                ip_doc.push_str(&format!("## 视觉形象标准\n{}\n\n", ip_ref.visual_prompt.trim()));
-            }
-            if !ip_ref.images.is_empty() {
-                ip_doc.push_str("## 标准角色参考图（位于本快照 references/ 目录）\n");
-                for img in &ip_ref.images {
-                    ip_doc.push_str(&format!("- references/{img}\n"));
-                }
-                ip_doc.push('\n');
-            }
-            if !ip_ref.voice_prompt.trim().is_empty() {
-                ip_doc.push_str(&format!("## 表达口吻设定\n{}\n\n", ip_ref.voice_prompt.trim()));
-            }
-            if !ip_ref.voice_sample.trim().is_empty() {
-                ip_doc.push_str(&format!("## 口吻样板片段\n{}\n", ip_ref.voice_sample.trim()));
-            }
-            self.atomic_write(&destination.join("ip.md"), ip_doc.as_bytes())?;
-        }
-
         for entry in skill.iter().chain(prompts.iter()) {
             for name in &entry.images {
-                copy_ref(name)?;
+                if !references.iter().any(|existing| existing == name) {
+                    self.atomic_write(
+                        &refs_dir.join(name),
+                        &fs::read(self.root.join("images").join(name))
+                            .map_err(|_| "无法读取参考图")?,
+                    )?;
+                    references.push(name.clone());
+                }
             }
         }
 
         if !prompts.is_empty() {
-            let mut prompt_doc = String::from("# 本轮挂载的风格提示词样板\n\n");
+            let mut doc = String::from("# 本轮引用的提示词样板\n\n");
             for item in &prompts {
-                prompt_doc.push_str(&format!("## {}\n{}\n", item.name, item.prompt.trim()));
-                if !item.sample_output.trim().is_empty() {
-                    prompt_doc.push_str(&format!(
-                        "\n### 样板参考输出\n{}\n",
-                        item.sample_output.trim()
-                    ));
+                let tag_line = if item.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "（{}）",
+                        item.tags
+                            .iter()
+                            .map(|t| format!("#{t}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    )
+                };
+                doc.push_str(&format!(
+                    "## [{}] {}{}\n{}\n",
+                    item.modality.label(),
+                    item.name,
+                    tag_line,
+                    item.prompt.trim()
+                ));
+                if !item.sample.trim().is_empty() {
+                    doc.push_str(&format!("\n样板示例：\n{}\n", item.sample.trim()));
                 }
                 if !item.images.is_empty() {
-                    prompt_doc.push_str("\n### 关联样板图\n");
+                    doc.push_str("\n关联参考图：\n");
                     for img in &item.images {
-                        prompt_doc.push_str(&format!("- references/{img}\n"));
+                        doc.push_str(&format!("- references/{img}\n"));
                     }
                 }
-                prompt_doc.push('\n');
+                doc.push('\n');
             }
-            self.atomic_write(&destination.join("prompts.md"), prompt_doc.as_bytes())?;
+            self.atomic_write(&destination.join("prompts.md"), doc.as_bytes())?;
         }
 
         let manifest = SnapshotManifest {
-            include_ip,
-            ip,
-            track: track.trim().into(),
             skill,
             prompts,
             references,
@@ -638,56 +384,39 @@ impl LibraryStore {
         Ok(manifest)
     }
 
-    #[allow(dead_code)]
-    pub fn snapshot_assets(
-        &self,
-        skill_id: &str,
-        prompt_ids: &[String],
-        destination: &Path,
-    ) -> Result<(Option<Entry>, Vec<Entry>), String> {
-        let manifest = self.snapshot_context(false, "", skill_id, prompt_ids, destination)?;
-        Ok((manifest.skill, manifest.prompts))
-    }
-
     pub fn list(&self) -> Result<Library, String> {
         let _guard = self.lock()?;
-        let ip = self.read_ip_unlocked()?;
         let mut entries = Vec::new();
-        for file in fs::read_dir(self.root.join("entries")).map_err(|_| "无法读取素材库")? {
-            let file = file.map_err(|_| "无法读取素材")?;
+        for file in fs::read_dir(self.root.join("entries")).map_err(|_| "无法读取样板间")? {
+            let file = file.map_err(|_| "无法读取样板")?;
             if file.path().extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            if !file.file_type().map_err(|_| "无法读取素材")?.is_file() {
-                return Err("素材文件类型无效".into());
+            if !file.file_type().map_err(|_| "无法读取样板")?.is_file() {
+                return Err("样板文件类型无效".into());
             }
             let mut entry: Entry =
-                serde_json::from_slice(&fs::read(file.path()).map_err(|_| "无法读取素材")?)
-                    .map_err(|_| "素材记录损坏，请保留文件后检查")?;
+                serde_json::from_slice(&fs::read(file.path()).map_err(|_| "无法读取样板")?)
+                    .map_err(|_| "样板记录损坏，请保留文件后检查")?;
             self.hydrate_skill(&mut entry)?;
             self.validate(&entry)?;
             if self.entry_path(&entry.id)? != file.path() {
-                return Err("素材文件与标识不一致".into());
+                return Err("样板文件与标识不一致".into());
             }
             entries.push(entry);
         }
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.name.cmp(&b.name)));
-        let mut categories = self.category_names()?;
+        let mut tags = Vec::new();
         for entry in &entries {
-            if !entry.category.is_empty() && !categories.contains(&entry.category) {
-                categories.push(entry.category.clone());
+            for tag in &entry.tags {
+                if !tag.is_empty() && !tags.contains(tag) {
+                    tags.push(tag.clone());
+                }
             }
         }
-        let mut tracks: Vec<String> = ip.tracks.iter().map(|t| t.name.clone()).collect();
-        for entry in &entries {
-            if !entry.track.trim().is_empty() && !tracks.contains(&entry.track) {
-                tracks.push(entry.track.clone());
-            }
-        }
+        tags.sort();
         Ok(Library {
-            ip,
-            categories,
-            tracks,
+            tags,
             entries,
             image_directory: self.root.join("images").to_string_lossy().into_owned(),
         })
@@ -703,11 +432,11 @@ impl LibraryStore {
             options.mode(0o600);
         }
         let result = (|| {
-            let mut file = options.open(&temporary).map_err(|_| "无法保存素材")?;
+            let mut file = options.open(&temporary).map_err(|_| "无法保存样板")?;
             file.write_all(bytes)
                 .and_then(|_| file.sync_all())
-                .map_err(|_| "无法保存素材")?;
-            fs::rename(&temporary, destination).map_err(|_| "无法替换素材记录")
+                .map_err(|_| "无法保存样板")?;
+            fs::rename(&temporary, destination).map_err(|_| "无法替换样板记录")
         })();
         if result.is_err() {
             let _ = fs::remove_file(&temporary);
@@ -750,8 +479,8 @@ impl LibraryStore {
             }
             let committed = if metadata.is_file() {
                 let entry: Entry =
-                    serde_json::from_slice(&fs::read(&metadata).map_err(|_| "无法读取素材")?)
-                        .map_err(|_| "素材记录损坏，保留 Skill 备份后检查")?;
+                    serde_json::from_slice(&fs::read(&metadata).map_err(|_| "无法读取样板")?)
+                        .map_err(|_| "样板记录损坏，保留 Skill 备份后检查")?;
                 entry.revision >= tx.revision
             } else {
                 false
@@ -996,17 +725,17 @@ impl LibraryStore {
         }
         let path = self.entry_path(&entry.id)?;
         let actual_revision = if path.exists() {
-            let old: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取素材")?)
-                .map_err(|_| "素材记录损坏")?;
+            let old: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取样板")?)
+                .map_err(|_| "样板记录损坏")?;
             if old.kind != entry.kind {
-                return Err("已有素材类型不能改变".into());
+                return Err("已有资产载体类型不能改变".into());
             }
             old.revision
         } else {
             0
         };
         if actual_revision != expected_revision {
-            return Err("素材已在其他位置修改，请返回样板间重新打开".into());
+            return Err("样板已在其他位置修改，请返回样板间重新打开".into());
         }
         if entry.kind == Kind::Prompt && (entry.prompt.trim().is_empty() || files.is_some()) {
             return Err("请填写提示词；文件夹属于 Skill".into());
@@ -1054,40 +783,21 @@ impl LibraryStore {
             }
             package = Some((staged, directory));
         }
-        entry.schema_version = 3;
+        entry.schema_version = 4;
         entry.name = entry.name.trim().into();
-        entry.category = entry.category.trim().into();
-        entry.track = entry.track.trim().into();
-        if entry.kind == Kind::Skill && entry.deliverable == DeliverableFormat::General {
-            entry.deliverable = DeliverableFormat::Cards;
-        }
-        if !entry.category.is_empty() {
-            let mut categories = self.category_names()?;
-            if !categories.contains(&entry.category) {
-                if categories.len() >= 500 {
-                    return Err("分类数量过多".into());
-                }
-                categories.push(entry.category.clone());
-                self.atomic_write(
-                    &self.root.join("categories.json"),
-                    &serde_json::to_vec_pretty(&categories).map_err(|_| "无法整理分类")?,
-                )?;
-            }
-        }
+        let mut seen = std::collections::HashSet::new();
         entry.tags = entry
             .tags
             .into_iter()
-            .map(|tag| tag.trim().to_string())
-            .filter(|tag| !tag.is_empty())
+            .map(|tag| tag.trim().trim_start_matches('#').trim().to_string())
+            .filter(|tag| !tag.is_empty() && seen.insert(tag.clone()))
             .collect();
-        entry.tags.sort();
-        entry.tags.dedup();
-        entry.revision = actual_revision.checked_add(1).ok_or("素材修订号无效")?;
+        entry.revision = actual_revision.checked_add(1).ok_or("修订号无效")?;
         entry.updated_at = Self::now_secs()?;
         let mut record = entry.clone();
         record.skill_markdown.clear();
         record.skill_digest = None;
-        let bytes = serde_json::to_vec_pretty(&record).map_err(|_| "无法整理素材")?;
+        let bytes = serde_json::to_vec_pretty(&record).map_err(|_| "无法整理样板")?;
         if let Some((staged, directory)) = &package {
             let backup = directory
                 .exists()
@@ -1203,14 +913,6 @@ pub async fn library_delete(
     store.delete_entry(&id, expected_revision)
 }
 #[tauri::command]
-pub async fn library_save_ip(
-    store: tauri::State<'_, LibraryStore>,
-    ip: IpFoundation,
-    expected_revision: u64,
-) -> Result<IpFoundation, String> {
-    store.save_ip(ip, expected_revision)
-}
-#[tauri::command]
 pub async fn library_import_image(
     store: tauri::State<'_, LibraryStore>,
     data_url: String,
@@ -1231,40 +933,20 @@ pub async fn library_open_skill_folder(
 ) -> Result<(), String> {
     store.open_skill_folder(&id)
 }
-#[tauri::command]
-pub async fn library_add_category(
-    store: tauri::State<'_, LibraryStore>,
-    name: String,
-) -> Result<Vec<String>, String> {
-    store.add_category(&name)
-}
-#[tauri::command]
-pub async fn library_move_category(
-    store: tauri::State<'_, LibraryStore>,
-    id: String,
-    revision: u64,
-    category: String,
-) -> Result<Entry, String> {
-    store.move_category(&id, revision, &category)
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     fn entry() -> Entry {
         Entry {
-            schema_version: 3,
+            schema_version: 4,
             id: String::new(),
             kind: Kind::Prompt,
-            name: "安静蜡笔卡片风".into(),
-            prompt: "yellow hair, black hoodie, crayon paper texture".into(),
-            category: default_category(),
-            deliverable: DeliverableFormat::General,
-            track: String::new(),
-            maturity: Maturity::Showcase,
-            sample_input: String::new(),
-            sample_output: String::new(),
-            tags: vec![],
+            modality: Modality::Image,
+            name: "安静角色设定".into(),
+            prompt: "蛋黄黄乱发、黑卫衣、粗蜡笔纸纹".into(),
+            sample: "安静站在白板旁微笑".into(),
+            tags: vec!["#安静".into(), "粗蜡笔".into(), "安静".into()],
             notes: String::new(),
             origin_created_at: None,
             origin_updated_at: None,
@@ -1278,114 +960,32 @@ mod tests {
     }
 
     #[test]
-    fn ip_foundation_and_showcase_context_snapshot_preserve_revision_and_assets() {
+    fn tags_normalize_deduplicate_and_snapshot_preserves_atomic_prompts_and_refs() {
         let root = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(root.path().join("library")).unwrap();
         let bytes = include_bytes!("../icons/32x32.png");
         let img = store.import_image_bytes(bytes).unwrap();
-        let ip = IpFoundation {
-            name: "安静".into(),
-            visual_prompt: "蛋黄黄乱发、黑卫衣、圆脸点眼、粗蜡笔纸纹".into(),
-            images: vec![img.clone()],
-            voice_prompt: "计算机从业者视角，先说结论，克制直白".into(),
-            voice_sample: "把复杂工程拆成一张图能看懂的结构。".into(),
-            tracks: vec![
-                Track {
-                    name: "计算机".into(),
-                    positioning: "架构拆解与 AI 工程实践".into(),
-                },
-                Track {
-                    name: "金融".into(),
-                    positioning: "常识与风险认知".into(),
-                },
-            ],
-            revision: 0,
-            updated_at: 0,
-        };
-        let saved_ip = store.save_ip(ip.clone(), 0).unwrap();
-        assert_eq!(saved_ip.revision, 1);
-        assert!(store.save_ip(ip, 0).is_err());
+        let mut item = entry();
+        item.images = vec![img.clone()];
+        let saved = store.save(item, 0, None).unwrap();
+        assert_eq!(saved.tags, vec!["安静", "粗蜡笔"]);
+        assert_eq!(store.list().unwrap().tags, vec!["安静", "粗蜡笔"]);
 
-        let mut prompt_entry = entry();
-        prompt_entry.track = "计算机".into();
-        prompt_entry.sample_output = "示例输出段落".into();
-        let saved_prompt = store.save(prompt_entry, 0, None).unwrap();
-
-        let snapshot_dir = root.path().join("snapshot-1");
+        let snap = root.path().join("snap-1");
         let manifest = store
-            .snapshot_context(
-                true,
-                "计算机",
-                "builtin:cards-series",
-                std::slice::from_ref(&saved_prompt.id),
-                &snapshot_dir,
-            )
+            .snapshot_assets("builtin:image-single", std::slice::from_ref(&saved.id), &snap)
             .unwrap();
-        assert_eq!(manifest.ip.unwrap().name, "安静");
-        assert!(snapshot_dir.join("ip.md").is_file());
-        assert!(snapshot_dir.join("prompts.md").is_file());
-        assert!(snapshot_dir.join("skill/SKILL.md").is_file());
-        assert!(snapshot_dir.join("references").join(&img).is_file());
-        assert!(fs::read_to_string(snapshot_dir.join("ip.md"))
+        assert_eq!(manifest.prompts.len(), 1);
+        assert!(snap.join("prompts.md").is_file());
+        assert!(snap.join("skill/SKILL.md").is_file());
+        assert!(snap.join("references").join(&img).is_file());
+        assert!(fs::read_to_string(snap.join("prompts.md"))
             .unwrap()
-            .contains("架构拆解与 AI 工程实践"));
+            .contains("#安静"));
 
-        let listed = store.list().unwrap();
-        assert_eq!(listed.tracks, vec!["计算机", "金融"]);
-        assert!(store.delete_entry(&saved_prompt.id, 0).is_err());
-        store
-            .delete_entry(&saved_prompt.id, saved_prompt.revision)
-            .unwrap();
+        assert!(store.delete_entry(&saved.id, 0).is_err());
+        store.delete_entry(&saved.id, saved.revision).unwrap();
         assert!(store.list().unwrap().entries.is_empty());
-    }
-
-    #[test]
-    fn material_snapshot_allows_no_skill_and_preserves_selected_prompt() {
-        let root = tempfile::tempdir().unwrap();
-        let store = LibraryStore::new(root.path().join("library")).unwrap();
-        let saved = store.save(entry(), 0, None).unwrap();
-        let target = root.path().join("snapshot");
-        let (skill, prompts) = store
-            .snapshot_assets("", std::slice::from_ref(&saved.id), &target)
-            .unwrap();
-        assert!(skill.is_none());
-        assert!(!target.join("skill").exists());
-        assert_eq!(prompts[0].prompt, saved.prompt);
-        let (skill, prompts) = store
-            .snapshot_assets("", &[], &root.path().join("empty"))
-            .unwrap();
-        assert!(skill.is_none());
-        assert!(prompts.is_empty());
-    }
-
-    #[test]
-    fn categories_clear_and_move_preserve_content_and_reject_stale_drag() {
-        let root = tempfile::tempdir().unwrap();
-        let store = LibraryStore::new(root.path().into()).unwrap();
-        let mut original = entry();
-        original.category = "Old".into();
-        let first = store.save(original, 0, None).unwrap();
-        store.add_category("Empty").unwrap();
-        assert_eq!(store.clear_categories().unwrap(), 1);
-        let cleared = store.list().unwrap();
-        assert!(cleared.categories.is_empty());
-        assert_eq!(cleared.entries.len(), 1);
-        assert_eq!(cleared.entries[0].prompt, first.prompt);
-        assert_eq!(cleared.entries[0].images, first.images);
-        assert!(cleared.entries[0].category.is_empty());
-        store.add_category("New").unwrap();
-        let current = &cleared.entries[0];
-        let moved = store
-            .move_category(&current.id, current.revision, "New")
-            .unwrap();
-        assert_eq!(moved.category, "New");
-        assert_eq!(moved.prompt, first.prompt);
-        assert!(store
-            .move_category(&current.id, current.revision, "")
-            .is_err());
-        assert!(store
-            .move_category(&moved.id, moved.revision, "Unknown")
-            .is_err());
     }
 
     #[test]
@@ -1474,21 +1074,6 @@ mod tests {
             "# Original"
         );
         assert!(!journal.exists());
-        let backup = format!(".previous-{}", Uuid::new_v4());
-        fs::create_dir(dir.path().join("skills").join(&backup)).unwrap();
-        let tx = SkillTransaction {
-            id: saved.id.clone(),
-            staged: format!(".stage-{}", Uuid::new_v4()),
-            backup: Some(backup.clone()),
-            revision: 1,
-        };
-        fs::write(&journal, serde_json::to_vec(&tx).unwrap()).unwrap();
-        let reopened = LibraryStore::new(dir.path().into()).unwrap();
-        assert_eq!(
-            reopened.list().unwrap().entries[0].skill_markdown,
-            "# Original"
-        );
-        assert!(!dir.path().join("skills").join(&backup).exists());
     }
 
     #[test]

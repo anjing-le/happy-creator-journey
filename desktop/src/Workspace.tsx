@@ -72,7 +72,7 @@ export function Workspace() {
           </div>
           <button
             className="library-entry home-library-region"
-            aria-label="样板间与 IP 底座"
+            aria-label="样板间"
             onClick={() => navigate({ page: 'showcase' })}
           >
             <img src="/entrances/library-v2.png" alt="" draggable={false} />

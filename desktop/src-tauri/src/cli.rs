@@ -1,5 +1,5 @@
 //! Local CLI: invokes the same store as the desktop app without launching a webview.
-use crate::library::{DeliverableFormat, Entry, ImportFile, IpFoundation, Kind, LibraryStore, Maturity};
+use crate::library::{Entry, ImportFile, Kind, LibraryStore, Modality};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{
@@ -37,43 +37,12 @@ fn option(args: &[String], key: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-fn read_json_input(args: &[String], input: &mut dyn Read) -> Result<Vec<u8>, String> {
-    let file = option(args, "--file")?;
-    let stdin = args.iter().any(|arg| arg == "--stdin");
-    if stdin == file.is_some() {
-        return Err("Choose exactly one of --stdin or --file".into());
-    }
-    let bytes = if let Some(path) = file {
-        std::fs::read(path).map_err(|_| "Cannot read input file")?
-    } else {
-        let mut bytes = Vec::new();
-        input
-            .take(2_000_001)
-            .read_to_end(&mut bytes)
-            .map_err(|_| "Cannot read stdin")?;
-        bytes
-    };
-    if bytes.len() > 2_000_000 {
-        return Err("Input JSON is too large".into());
-    }
-    Ok(bytes)
-}
-
-fn parse_deliverable(value: &str) -> Result<DeliverableFormat, String> {
+fn parse_modality(value: &str) -> Result<Modality, String> {
     match value {
-        "general" => Ok(DeliverableFormat::General),
-        "cards" => Ok(DeliverableFormat::Cards),
-        "article" => Ok(DeliverableFormat::Article),
-        "video" => Ok(DeliverableFormat::Video),
-        _ => Err("deliverable must be general, cards, article, or video".into()),
-    }
-}
-
-fn parse_maturity(value: &str) -> Result<Maturity, String> {
-    match value {
-        "showcase" => Ok(Maturity::Showcase),
-        "draft" => Ok(Maturity::Draft),
-        _ => Err("maturity must be showcase or draft".into()),
+        "text" => Ok(Modality::Text),
+        "image" => Ok(Modality::Image),
+        "video" => Ok(Modality::Video),
+        _ => Err("modality must be text, image, or video".into()),
     }
 }
 
@@ -83,21 +52,28 @@ fn schema() -> Value {
         "version":env!("CARGO_PKG_VERSION"),
         "commands":[
             {"usage":"schema","effect":"read-only command and data schema"},
-            {"usage":"library ip","effect":"read creator IP foundation"},
-            {"usage":"library save-ip (--stdin | --file JSON) [--if-revision N]","effect":"save creator IP foundation with revision check"},
-            {"usage":"library list [--kind prompt|skill] [--deliverable general|cards|article|video] [--track NAME] [--maturity showcase|draft] [--category NAME] [--search TEXT]","effect":"read local showcase and draft entries"},
+            {"usage":"library list [--kind prompt|skill] [--modality text|image|video] [--tag TAG] [--search TEXT]","effect":"read local showcase entries"},
+            {"usage":"library tags","effect":"read deduplicated tags across all entries"},
             {"usage":"library get ID","effect":"read complete entry and prompt/SKILL.md"},
             {"usage":"library save (--stdin | --file JSON) [--if-revision N]","effect":"create/update entry; updates require current revision; Skill saves create/update a real folder"},
             {"usage":"library delete ID --if-revision N","effect":"delete entry with revision check"},
-            {"usage":"library import-skill --folder PATH [--name NAME] [--category NAME] [--deliverable cards|article|video] [--track NAME] [--maturity showcase|draft]","effect":"copy complete folder locally; scripts are never executed"},
-            {"usage":"library clear-categories","effect":"remove all category assignments; preserve materials"},
-            {"usage":"library categories","effect":"read categories, including empty ones"},
-            {"usage":"library add-category --name NAME","effect":"create a category without replacing existing categories"},
+            {"usage":"library import-skill --folder PATH [--name NAME] [--modality text|image|video] [--tags TAG1,TAG2]","effect":"copy complete folder locally; scripts are never executed"},
             {"usage":"library skill-files ID","effect":"read relative package file paths"},
-            {"usage":"library import-image --file PATH","effect":"copy and deduplicate reference/showcase image bytes locally"}
+            {"usage":"library import-image --file PATH","effect":"copy and deduplicate showcase/reference image bytes locally"}
         ],
-        "ip":{"name":"string","visualPrompt":"string","images":"stored image hashes","voicePrompt":"string","voiceSample":"string","tracks":"[{name,positioning}]","revision":"read before updating"},
-        "entry":{"kind":"prompt|skill","name":"required","deliverable":"general|cards|article|video","track":"empty means general track","maturity":"showcase|draft","sampleInput":"string","sampleOutput":"string","prompt":"required for prompt","skillMarkdown":"SKILL.md for skill","category":"empty means unclassified","tags":"string[]","notes":"string","images":"stored image hashes","id":"empty for create","revision":"read before updating"},
+        "entry":{
+            "kind":"prompt|skill",
+            "modality":"text|image|video",
+            "name":"required",
+            "prompt":"required for prompt",
+            "skillMarkdown":"SKILL.md for skill",
+            "sample":"sample text output or showcase summary",
+            "tags":"string[] (e.g. [\"安静\", \"粗蜡笔\", \"计算机\"])",
+            "notes":"string",
+            "images":"stored image hashes",
+            "id":"empty for create",
+            "revision":"read before updating"
+        },
         "limits":{"skillFiles":512,"skillTotalMB":64,"skillFileMB":16},
         "storage":"same application data as GUI; CREATORX_LIBRARY_DIR overrides CLI storage for tests",
         "output":"JSON: ok/data or ok/error"
@@ -116,26 +92,11 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
         .map(String::as_str)
         .ok_or("Missing library command")?;
     let allowed: &[&str] = match command {
-        "list" => &[
-            "--kind",
-            "--category",
-            "--deliverable",
-            "--track",
-            "--maturity",
-            "--search",
-        ],
-        "save" | "save-ip" => &["--stdin", "--file", "--if-revision"],
+        "list" => &["--kind", "--modality", "--tag", "--search"],
+        "save" => &["--stdin", "--file", "--if-revision"],
         "delete" => &["--if-revision"],
-        "import-skill" => &[
-            "--folder",
-            "--name",
-            "--category",
-            "--deliverable",
-            "--track",
-            "--maturity",
-        ],
-        "ip" | "get" | "skill-files" | "categories" | "clear-categories" => &[],
-        "add-category" => &["--name"],
+        "import-skill" => &["--folder", "--name", "--modality", "--tags"],
+        "tags" | "get" | "skill-files" => &[],
         "import-image" => &["--file"],
         _ => return Err("Unsupported command; use schema".into()),
     };
@@ -154,17 +115,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
     }
     let store = LibraryStore::new(default_root()?)?;
     match command {
-        "ip" => serde_json::to_value(store.get_ip()?).map_err(|e| e.to_string()),
-        "save-ip" => {
-            let bytes = read_json_input(args, input)?;
-            let ip: IpFoundation =
-                serde_json::from_slice(&bytes).map_err(|e| format!("Invalid IP JSON: {e}"))?;
-            let expected = option(args, "--if-revision")?
-                .unwrap_or_else(|| ip.revision.to_string())
-                .parse()
-                .map_err(|_| "Invalid revision")?;
-            serde_json::to_value(store.save_ip(ip, expected)?).map_err(|e| e.to_string())
-        }
+        "tags" => Ok(json!(store.list()?.tags)),
         "list" => {
             let kind = option(args, "--kind")?;
             if kind
@@ -173,16 +124,12 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
             {
                 return Err("kind must be prompt or skill".into());
             }
-            let deliverable = option(args, "--deliverable")?
+            let modality = option(args, "--modality")?
                 .as_deref()
-                .map(parse_deliverable)
+                .map(parse_modality)
                 .transpose()?;
-            let maturity = option(args, "--maturity")?
-                .as_deref()
-                .map(parse_maturity)
-                .transpose()?;
-            let track = option(args, "--track")?;
-            let category = option(args, "--category")?;
+            let tag = option(args, "--tag")?
+                .map(|t| t.trim().trim_start_matches('#').to_string());
             let search = option(args, "--search")?.unwrap_or_default().to_lowercase();
             let entries: Vec<_> = store
                 .list()?
@@ -193,18 +140,15 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                         .as_ref()
                         .is_none_or(|k| (k == "prompt") == (e.kind == Kind::Prompt));
                     matches_kind
-                        && deliverable.is_none_or(|d| e.deliverable == d)
-                        && maturity.is_none_or(|m| e.maturity == m)
-                        && track.as_ref().is_none_or(|t| &e.track == t)
-                        && category.as_ref().is_none_or(|c| c == &e.category)
+                        && modality.is_none_or(|m| e.modality == m)
+                        && tag.as_ref().is_none_or(|t| e.tags.iter().any(|et| et == t))
                         && format!(
-                            "{} {} {} {} {} {} {}",
+                            "{} {} {} {} {} {}",
                             e.name,
                             e.prompt,
                             e.skill_markdown,
-                            e.sample_output,
+                            e.sample,
                             e.notes,
-                            e.track,
                             e.tags.join(" ")
                         )
                         .to_lowercase()
@@ -226,7 +170,24 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
             .map_err(|e| e.to_string())
         }
         "save" => {
-            let bytes = read_json_input(args, input)?;
+            let file = option(args, "--file")?;
+            let stdin = args.iter().any(|arg| arg == "--stdin");
+            if stdin == file.is_some() {
+                return Err("Choose exactly one of --stdin or --file".into());
+            }
+            let bytes = if let Some(path) = file {
+                std::fs::read(path).map_err(|_| "Cannot read input file")?
+            } else {
+                let mut bytes = Vec::new();
+                input
+                    .take(2_000_001)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "Cannot read stdin")?;
+                bytes
+            };
+            if bytes.len() > 2_000_000 {
+                return Err("Input JSON is too large".into());
+            }
             let entry: Entry =
                 serde_json::from_slice(&bytes).map_err(|e| format!("Invalid entry JSON: {e}"))?;
             let expected = option(args, "--if-revision")?;
@@ -273,24 +234,20 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                     .to_string_lossy()
                     .into_owned()
             });
-            let deliverable = option(args, "--deliverable")?
+            let modality = option(args, "--modality")?
                 .as_deref()
-                .map(parse_deliverable)
+                .map(parse_modality)
                 .transpose()?
-                .unwrap_or(DeliverableFormat::Cards);
-            let maturity = option(args, "--maturity")?
-                .as_deref()
-                .map(parse_maturity)
-                .transpose()?
-                .unwrap_or(Maturity::Showcase);
+                .unwrap_or(Modality::Image);
+            let tags: Vec<String> = option(args, "--tags")?
+                .map(|raw| raw.split(',').map(|s| s.trim().to_string()).collect())
+                .unwrap_or_default();
             let entry: Entry = serde_json::from_value(json!({
                 "kind":"skill",
+                "modality":modality,
                 "name":name,
                 "skillMarkdown":markdown,
-                "category":option(args,"--category")?.unwrap_or_default(),
-                "deliverable":deliverable,
-                "track":option(args,"--track")?.unwrap_or_default(),
-                "maturity":maturity
+                "tags":tags
             }))
             .map_err(|e| e.to_string())?;
             let files = files
@@ -302,11 +259,6 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                 .collect();
             serde_json::to_value(store.save(entry, 0, Some(files))?).map_err(|e| e.to_string())
         }
-        "clear-categories" => Ok(json!({"changed": store.clear_categories()?})),
-        "categories" => Ok(json!(store.list()?.categories)),
-        "add-category" => Ok(json!(
-            store.add_category(&option(args, "--name")?.ok_or("Missing --name")?)?
-        )),
         "import-image" => {
             let path = PathBuf::from(option(args, "--file")?.ok_or("Missing --file")?);
             if std::fs::metadata(&path)

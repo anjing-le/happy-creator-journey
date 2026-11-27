@@ -1,62 +1,42 @@
-use crate::library::{DeliverableFormat, Entry, Kind, Maturity};
+use crate::library::{Entry, Kind, Modality};
 
 pub fn entries() -> Vec<Entry> {
     [
         (
-            "cards-series",
-            "卡片图文样板",
-            "卡片图文",
-            DeliverableFormat::Cards,
-            "适用小红书／抖音 3:4 系列卡片：封面钩子卡 ＋ 分页重点卡 ＋ 发布短配文",
-            include_str!("../../skills/cards-series/SKILL.md"),
-        ),
-        (
-            "article-illustrated",
-            "长文配图样板",
-            "长文配图",
-            DeliverableFormat::Article,
-            "适用微信公众号深度长文：结构化 Markdown 定稿 ＋ 封面与概念插图锚点",
-            include_str!("../../skills/article-illustrated/SKILL.md"),
-        ),
-        (
-            "video-storyboard",
-            "视频分镜样板",
-            "视频创作",
-            DeliverableFormat::Video,
-            "适用抖音／小红书短视频：前 3 秒钩子口播稿 ＋ 逐镜画面／时长／关键帧蓝图",
-            include_str!("../../skills/video-storyboard/SKILL.md"),
-        ),
-        (
             "image-single",
-            "单张视觉图文",
-            "卡片图文",
-            DeliverableFormat::Cards,
-            "适用单张海报／信息图：确认核心文案与构图后生成单张成图",
+            "单张生图",
+            Modality::Image,
+            vec!["生图", "单图"],
+            "根据确认的文案、构图与参考图生成单张图片，核对图内文字与角色一致性。",
             include_str!("../../skills/image-single/SKILL.md"),
         ),
         (
+            "image-series",
+            "系列套图",
+            Modality::Image,
+            vec!["生图", "套图"],
+            "保持同一画幅、纸面质感与角色设定，按页依次生成系列图片。",
+            include_str!("../../skills/image-series/SKILL.md"),
+        ),
+        (
             "image-revision",
-            "原图受控修改",
-            "卡片图文",
-            DeliverableFormat::Cards,
-            "基于已有槽位原图做局部文字或细节微调，保留全部历史版本",
+            "原图微调",
+            Modality::Image,
+            vec!["生图", "改图"],
+            "引用上一版真实原图只改指定细节，另存新版本并完整保留旧版。",
             include_str!("../../skills/image-revision/SKILL.md"),
         ),
     ]
     .into_iter()
-    .map(|(id, name, category, deliverable, sample_output, markdown)| Entry {
-        schema_version: 3,
+    .map(|(id, name, modality, tags, sample, markdown)| Entry {
+        schema_version: 4,
         id: format!("builtin:{id}"),
         kind: Kind::Skill,
+        modality,
         name: name.into(),
         prompt: String::new(),
-        category: category.into(),
-        deliverable,
-        track: String::new(),
-        maturity: Maturity::Showcase,
-        sample_input: String::new(),
-        sample_output: sample_output.into(),
-        tags: vec![],
+        sample: sample.into(),
+        tags: tags.into_iter().map(str::to_string).collect(),
         notes: String::new(),
         origin_created_at: None,
         origin_updated_at: None,
@@ -65,7 +45,7 @@ pub fn entries() -> Vec<Entry> {
         images: vec![],
         revision: 1,
         updated_at: 0,
-        source: Some("CreatorX 内置样板".into()),
+        source: Some("CreatorX 内置原子 Skill".into()),
     })
     .collect()
 }

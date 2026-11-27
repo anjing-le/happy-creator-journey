@@ -1,11 +1,8 @@
 export type StudioEntrance = '图文' | '视频';
-export type StudioFormat = 'cards' | 'article' | 'video';
 
 export interface StudioLaunch {
-  deliverable?: StudioFormat;
   skillId?: string;
   promptId?: string;
-  track?: string;
   nonce?: number;
 }
 

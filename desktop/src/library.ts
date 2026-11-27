@@ -1,39 +1,24 @@
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core';
 
 export type AssetKind = 'prompt' | 'skill';
-export type DeliverableFormat = 'general' | 'cards' | 'article' | 'video';
-export type Maturity = 'showcase' | 'draft';
+export type Modality = 'text' | 'image' | 'video';
 
-export interface Track {
-  name: string;
-  positioning: string;
-}
-
-export interface IpFoundation {
-  name: string;
-  visualPrompt: string;
-  images: string[];
-  voicePrompt: string;
-  voiceSample: string;
-  tracks: Track[];
-  revision: number;
-  updatedAt: number;
-}
+export const MODALITY_LABELS: Record<Modality, string> = {
+  text: '文',
+  image: '图',
+  video: '视频',
+};
 
 export interface AssetEntry {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: number;
   id: string;
   kind: AssetKind;
+  modality: Modality;
   name: string;
   prompt: string;
   skillMarkdown: string;
   skillDigest?: string | null;
-  category: string;
-  deliverable: DeliverableFormat;
-  track: string;
-  maturity: Maturity;
-  sampleInput: string;
-  sampleOutput: string;
+  sample: string;
   tags: string[];
   notes: string;
   images: string[];
@@ -45,39 +30,22 @@ export interface AssetEntry {
 }
 
 export interface AssetLibrary {
-  ip: IpFoundation;
   entries: AssetEntry[];
   imageDirectory: string;
-  categories: string[];
-  tracks: string[];
+  tags: string[];
 }
 
-export const DELIVERABLE_LABELS: Record<DeliverableFormat, string> = {
-  general: '通用',
-  cards: '卡片图文',
-  article: '长文配图',
-  video: '视频创作',
-};
-
-export function emptyIp(): IpFoundation {
-  return { name: '', visualPrompt: '', images: [], voicePrompt: '', voiceSample: '', tracks: [], revision: 0, updatedAt: 0 };
-}
-
-export function emptyEntry(kind: AssetKind, deliverable: DeliverableFormat = kind === 'skill' ? 'cards' : 'general'): AssetEntry {
+export function emptyEntry(kind: AssetKind, modality: Modality = 'image'): AssetEntry {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     id: '',
     kind,
+    modality,
     name: '',
     prompt: '',
     skillMarkdown: '',
     skillDigest: null,
-    category: kind === 'skill' ? DELIVERABLE_LABELS[deliverable === 'general' ? 'cards' : deliverable] : '视觉画风',
-    deliverable: kind === 'skill' && deliverable === 'general' ? 'cards' : deliverable,
-    track: '',
-    maturity: 'showcase',
-    sampleInput: '',
-    sampleOutput: '',
+    sample: '',
     tags: [],
     notes: '',
     images: [],
@@ -87,12 +55,8 @@ export function emptyEntry(kind: AssetKind, deliverable: DeliverableFormat = kin
 }
 
 export function loadLibrary(): Promise<AssetLibrary> {
-  if (!isTauri()) return Promise.resolve({ ip: emptyIp(), entries: [], imageDirectory: '', categories: [], tracks: [] });
+  if (!isTauri()) return Promise.resolve({ entries: [], imageDirectory: '', tags: [] });
   return invoke('library_list');
-}
-
-export function saveIp(ip: IpFoundation): Promise<IpFoundation> {
-  return invoke('library_save_ip', { ip, expectedRevision: ip.revision });
 }
 
 export function saveEntry(entry: AssetEntry, files?: SkillFile[]): Promise<AssetEntry> {
@@ -145,7 +109,3 @@ export async function readSkillFolder(files: FileList): Promise<{ name: string; 
 
 export function skillFiles(id: string): Promise<string[]> { return invoke('library_skill_files', { id }); }
 export function openSkillFolder(id: string): Promise<void> { return invoke('library_open_skill_folder', { id }); }
-export function addCategory(name: string): Promise<string[]> { return invoke('library_add_category', { name }); }
-export function moveCategory(entry: AssetEntry, category: string): Promise<AssetEntry> {
-  return invoke('library_move_category', { id: entry.id, revision: entry.revision, category });
-}

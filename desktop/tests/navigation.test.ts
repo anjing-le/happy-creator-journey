@@ -21,10 +21,10 @@ test('visiting showcase after going back replaces the forward branch', () => {
   assert.equal(navigationReducer(state, { type: 'visit', route: { page: 'showcase' } }), state);
 });
 
-test('launching studio from showcase records exact template launch route', () => {
+test('launching studio from showcase records atomic asset launch route', () => {
   let state = initialNavigation;
   state = navigationReducer(state, { type: 'visit', route: { page: 'showcase' } });
-  state = navigationReducer(state, { type: 'visit', route: { page: 'studio', name: '图文', launch: { deliverable: 'article', skillId: 'builtin:article-illustrated', track: '计算机', nonce: 1 } } });
+  state = navigationReducer(state, { type: 'visit', route: { page: 'studio', name: '图文', launch: { skillId: 'builtin:image-single', nonce: 1 } } });
   state = navigationReducer(state, { type: 'visit', route: { page: 'studio', name: '视频' } });
   state = navigationReducer(navigationReducer(state, { type: 'back' }), { type: 'back' });
   assert.deepEqual(state.history[state.position], { page: 'showcase' });
