@@ -27,3 +27,30 @@ uv run --with pillow==13.0.0 python desktop/scripts/verify-icon-alpha.py --bundl
 | Windows 实机 | 当前无 Windows 桌面可用；ICO 透明度及跨平台构建与实际系统显示分别记录。 |
 
 未验证位置不宣称无底板；系统自动附加的显示样式也不能靠源 PNG 的 Alpha 检查来判断。
+
+## 2026-11-27 本机退出图标修复
+
+本机 macOS 27.0.1 在 CreatorX 退出后，会给透明 ICNS 合成灰色圆角底板。已从 `NSWorkspace.icon(forFile:)` 读取系统解析结果复现，原 PNG／ICNS 的透明通道没有丢失。
+
+参考 FinanceX 当前的 `scripts/package-preview.py` 与 `scripts/icon-raster.swift`，给已安装 CreatorX 设置 `NSWorkspace.setIcon(_:forFile:options:)` 自定义文件图标。运行中的 Dock 继续沿用现有透明 PNG；不改主体图片、不改应用内容文件。
+
+```sh
+mkdir -p desktop/.local
+swiftc desktop/scripts/macos-file-icon.swift -o desktop/.local/macos-file-icon
+# 先备份干净安装并验证其代码签名，然后只对本机安装路径定制。
+desktop/.local/macos-file-icon apply "$HOME/Applications/CreatorX.app" desktop/src-tauri/icons/icon.png
+desktop/.local/macos-file-icon inspect "$HOME/Applications/CreatorX.app" desktop/.local/system-icon.png
+```
+
+| 检查位置 | 实际结果 |
+| --- | --- |
+| 退出后的系统解析图标 | 已导出并检查，灰色底板消失，外围保留透明。 |
+| 实际访达图标 | 已打开应用目录查看；启动并 Command + Q 退出后再次查看，仍无底板。 |
+| 实际 Dock 截图 | Dock 自动读取超时，尚未完成该位置的视觉验收。系统解析结果不能冒充 Dock 截图。 |
+| 客户端运行 | 本机已正常打开并完全退出。 |
+| 图像资源与安装内容 | 透明资源检查通过；与干净备份逐文件比较，`Contents/` 内容未改变。 |
+| 签名 | 干净备份严格校验通过；定制后由于 FinderInfo／资源分叉，严格校验会报错，与 FinanceX 本机定制方式相同。 |
+
+**适用范围**：只用于本机定制。不得把图标元数据并入发行包、OTA 包或公证产物，不在应用启动时自动修改自身。OTA 替换整个 `.app` 后需要重新定制；本次未发布新的二进制版本，仍为 0.0.17。
+
+本机干净安装备份、前后系统图标、Alpha 检查和验证记录保存在忽略目录 `desktop/.local/icon-fix-20261127/`，没有公开发布。`restore APP` 可清除自定义图标；恢复严格签名应从干净安装包或保留的完整备份恢复应用，再校验。个人素材与创作任务在独立应用数据目录，不受图标定制影响。
