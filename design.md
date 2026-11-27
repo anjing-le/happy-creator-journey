@@ -68,7 +68,7 @@ flowchart TB
   - 移除前端所有传统增删改查控件、编辑页、搜索框与内联表单；样板间支持基于 `stateToken` 的自动无感热刷新；
   - 落地受控 Tag 表与内置标准 **`creatorx mcp`（Stdio JSON-RPC 2.0）** 服务（共 11 个原子工具），并已注册进本机 Antigravity 全局 MCP 配置（`~/.gemini/config/mcp_config.json`）；
   - 本机历史旧数据保留在私有备份目录 `archive-v0.0.17/`，活动库干净起盘；
-  - 前后端构建、单测、MCP ＆ CLI 跨进程测试、GitHub 双平台检查与三平台更新签名包验证通过，本机 `~/Applications/CreatorX.app` 已更新至 `0.1.2`。
+  - 前后端构建、单测、MCP ＆ CLI 跨进程测试、[GitHub 双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/46023076619)、[三平台更新签名构建](https://github.com/anjing-le/happy-creator-journey/actions/runs/46023081133)与正式发布 [creatorx-v0.1.2](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.1.2) 验证通过，本机 `~/Applications/CreatorX.app` 已更新至 `0.1.2`。
 - **待验证与后续推进**：
   - 直接用 Antigravity 等 Agent 通过 MCP 逐个建立受控 Tag、迁入或新增提示词与细粒度 Skill 样板；
   - 历史遗留项保持如实记录：OTA 自动重启后窗口唤起异常待排查、鼠标侧键待真鼠实测、Windows 真机交互与平台代码签名／公证待后续推进。

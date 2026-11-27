@@ -1,6 +1,6 @@
 # CreatorX 客户端说明
 
-当前版本 **0.1.2**：**零传统 CRUD 界面 ＋ 内置 `creatorx mcp` Agent 原生维护**的极简 Creation Harness 客户端。
+当前版本 **0.1.2**（[Release `creatorx-v0.1.2`](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.1.2)｜[双平台 Checks](https://github.com/anjing-le/happy-creator-journey/actions/runs/46023076619)｜[三平台签名构建](https://github.com/anjing-le/happy-creator-journey/actions/runs/46023081133)）：**零传统 CRUD 界面 ＋ 内置 `creatorx mcp` Agent 原生维护**的极简 Creation Harness 客户端。
 
 - **只读样板画册**：仅含 2 种基础类型（`提示词`、`Skill`）、3 个方向（`文`、`图`、`视频`）与受控 `#Tag` 切换浏览；无任何增删改查输入框或管理按钮，外部 Agent 更新本地库后窗口自动无感刷新。
 - **内置 MCP ＆ CLI**：同一个 `creatorx` 二进制提供 `creatorx mcp` 标准 Stdio 服务（见 [CLI.md](CLI.md) 与 [ARCHITECTURE.md](ARCHITECTURE.md)），Antigravity、Codex、Claude Code 等任意 Agent 均可直接维护受控 Tag、提示词、Skill 文件夹与样板图。
