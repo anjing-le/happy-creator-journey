@@ -6,7 +6,7 @@ use crate::{
     adapters::{
         AdapterEvent, AdapterRegistry, AdapterStatus, Capability, EventSink, TurnRequest,
     },
-    library::{Entry, Kind, LibraryStore, Modality},
+    library::LibraryStore,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -89,21 +89,6 @@ impl CreationJob {
     pub fn busy(&self) -> bool {
         ["starting", "running"].contains(&self.status.as_str())
     }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PromoteShowcaseRequest {
-    pub target_job_id: String,
-    pub modality: Modality,
-    pub name: String,
-    pub prompt: String,
-    #[serde(default)]
-    pub sample: String,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub notes: String,
 }
 
 struct Runtime {
@@ -556,7 +541,8 @@ impl HarnessEngine {
         }
     }
 
-    pub fn spawn_image_worker_from_ui(
+    #[cfg(test)]
+    pub fn spawn_image_worker_for_test(
         &self,
         parent_id: &str,
         source_task_id: Option<String>,
@@ -901,50 +887,6 @@ impl HarnessEngine {
         let _ = save_job_record(&self.0.root, job);
     }
 
-    pub fn promote_to_showcase(
-        &self,
-        store: &LibraryStore,
-        req: PromoteShowcaseRequest,
-    ) -> Result<Entry, String> {
-        let target = self.get(&req.target_job_id)?;
-        let dir = self.0.root.join(&target.id);
-        let mut image_hashes = Vec::new();
-        for rel in &target.images {
-            let bytes = fs::read(dir.join(rel)).map_err(|_| "无法读取作品原图以存为样板")?;
-            let hash_name = store.import_image_bytes(&bytes)?;
-            if !image_hashes.contains(&hash_name) && image_hashes.len() < 16 {
-                image_hashes.push(hash_name);
-            }
-        }
-        let sample = if !req.sample.trim().is_empty() {
-            req.sample
-        } else if !target.draft_markdown.trim().is_empty() {
-            target.draft_markdown.chars().take(2_000).collect()
-        } else {
-            String::new()
-        };
-        let entry = Entry {
-            schema_version: 4,
-            id: String::new(),
-            kind: Kind::Prompt,
-            modality: req.modality,
-            name: req.name.trim().into(),
-            prompt: req.prompt,
-            sample,
-            tags: req.tags,
-            notes: req.notes,
-            origin_created_at: None,
-            origin_updated_at: None,
-            skill_markdown: String::new(),
-            skill_digest: None,
-            images: image_hashes,
-            revision: 0,
-            updated_at: 0,
-            source: Some(format!("沉淀自创作：{}", target.title)),
-        };
-        store.save(entry, 0, None)
-    }
-
     pub fn cancel(&self, id: &str) -> Result<CreationJob, String> {
         let job = self.get(id)?;
         if !job.busy() {
@@ -1093,31 +1035,6 @@ pub async fn creation_continue(
 }
 
 #[tauri::command]
-pub async fn creation_revise_image(
-    engine: tauri::State<'_, HarnessEngine>,
-    parent_id: String,
-    source_task_id: Option<String>,
-    intent: String,
-) -> Result<CreationJob, String> {
-    let engine = engine.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        engine.spawn_image_worker_from_ui(&parent_id, source_task_id, intent)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn creation_promote_showcase(
-    app: tauri::AppHandle,
-    engine: tauri::State<'_, HarnessEngine>,
-    request: PromoteShowcaseRequest,
-) -> Result<Entry, String> {
-    let store = app.state::<LibraryStore>();
-    engine.promote_to_showcase(store.inner(), request)
-}
-
-#[tauri::command]
 pub async fn creation_cancel(
     engine: tauri::State<'_, HarnessEngine>,
     id: String,
@@ -1240,13 +1157,16 @@ mod tests {
     }
 
     #[test]
-    fn harness_preserves_tag_snapshots_original_images_on_revision_and_promotes_to_showcase() {
+    fn harness_preserves_tag_snapshots_and_original_images_on_revision() {
+        use crate::library::{Entry, Kind, Modality};
         let root = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(root.path().join("library")).unwrap();
+        store.tag_add("安静").unwrap();
+        store.tag_add("生图").unwrap();
         let anjing_prompt = store
             .save(
                 Entry {
-                    schema_version: 4,
+                    schema_version: 5,
                     id: String::new(),
                     kind: Kind::Prompt,
                     modality: Modality::Image,
@@ -1291,7 +1211,6 @@ mod tests {
             .join("snapshots/1/prompts.md");
         assert!(snap1.is_file());
 
-        // Switching skill mid-chat creates Snapshot #2 without overwriting Snapshot #1
         engine
             .continue_chat(
                 &parent.id,
@@ -1310,9 +1229,8 @@ mod tests {
         assert_eq!(parent.snapshot_seq, 2);
         assert!(snap1.is_file());
 
-        // Spawn first image worker -> produces verified image
         let v1_worker = engine
-            .spawn_image_worker_from_ui(&parent.id, None, "画封面：安静在黑板前".into())
+            .spawn_image_worker_for_test(&parent.id, None, "画封面：安静在黑板前".into())
             .unwrap();
         let v1_done = wait_idle(&engine, &v1_worker.id);
         assert_eq!(v1_done.images.len(), 1);
@@ -1323,9 +1241,8 @@ mod tests {
             .join(&v1_done.images[0]);
         let v1_bytes = fs::read(&v1_file).unwrap();
 
-        // Spawn revision worker referencing v1_done -> preserves v1_file untouched and creates new image
         let v2_worker = engine
-            .spawn_image_worker_from_ui(
+            .spawn_image_worker_for_test(
                 &parent.id,
                 Some(v1_done.id.clone()),
                 "把标题改短一点".into(),
@@ -1335,24 +1252,6 @@ mod tests {
         assert_eq!(v2_done.source_task_id.as_deref(), Some(v1_done.id.as_str()));
         assert_eq!(v2_done.images.len(), 1);
         assert_eq!(fs::read(&v1_file).unwrap(), v1_bytes);
-
-        // Promote v2_done straight back to Showcase with tags
-        let promoted = engine
-            .promote_to_showcase(
-                &store,
-                PromoteShowcaseRequest {
-                    target_job_id: v2_done.id,
-                    modality: Modality::Image,
-                    name: "安静黑板科普封面".into(),
-                    prompt: "安静站在黑板前讲解零拷贝，暖米白纸纹粗蜡笔".into(),
-                    sample: String::new(),
-                    tags: vec!["安静".into(), "计算机".into()],
-                    notes: String::new(),
-                },
-            )
-            .unwrap();
-        assert_eq!(promoted.images.len(), 1);
-        assert_eq!(promoted.tags, vec!["安静", "计算机"]);
     }
 
     #[test]
@@ -1367,7 +1266,7 @@ mod tests {
             .unwrap();
         let parent = wait_idle(&engine, &created.id);
         let worker = engine
-            .spawn_image_worker_from_ui(&parent.id, None, "生一张图".into())
+            .spawn_image_worker_for_test(&parent.id, None, "生一张图".into())
             .unwrap();
         let failed = wait_idle(&engine, &worker.id);
         assert_eq!(failed.status, "error");

@@ -12,10 +12,10 @@ use std::{
 use uuid::Uuid;
 
 fn current_schema() -> u32 {
-    4
+    5
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     #[serde(alias = "ip")]
@@ -88,6 +88,7 @@ pub struct Library {
     pub entries: Vec<Entry>,
     pub image_directory: String,
     pub tags: Vec<String>,
+    pub state_token: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +112,14 @@ struct SkillTransaction {
     staged: String,
     backup: Option<String>,
     revision: u64,
+}
+
+pub fn normalize_tag(raw: &str) -> Result<String, String> {
+    let clean = raw.trim().trim_start_matches('#').trim();
+    if clean.is_empty() || clean.chars().count() > 32 || clean.chars().any(char::is_control) {
+        return Err("标签名称需为 1–32 个有效字符".into());
+    }
+    Ok(clean.to_string())
 }
 
 pub struct LibraryStore {
@@ -175,6 +184,131 @@ impl LibraryStore {
         Ok(self.root.join("entries").join(format!("{id}.json")))
     }
 
+    fn read_tags_unlocked(&self) -> Result<Vec<String>, String> {
+        let path = self.root.join("tags.json");
+        if !path.exists() {
+            return Ok(vec![]);
+        }
+        let raw: Vec<String> =
+            serde_json::from_slice(&fs::read(path).map_err(|_| "无法读取标签表")?)
+                .map_err(|_| "标签表文件损坏")?;
+        if raw.len() > 500 {
+            return Err("标签数量超限".into());
+        }
+        let mut out = Vec::new();
+        for t in raw {
+            let norm = normalize_tag(&t)?;
+            if !out.contains(&norm) {
+                out.push(norm);
+            }
+        }
+        Ok(out)
+    }
+
+    fn write_tags_unlocked(&self, tags: &[String]) -> Result<(), String> {
+        self.atomic_write(
+            &self.root.join("tags.json"),
+            &serde_json::to_vec_pretty(tags).map_err(|_| "无法保存标签表")?,
+        )
+    }
+
+    pub fn tag_list(&self) -> Result<Vec<String>, String> {
+        let _guard = self.lock()?;
+        self.read_tags_unlocked()
+    }
+
+    pub fn tag_add(&self, name: &str) -> Result<Vec<String>, String> {
+        let _guard = self.lock()?;
+        let norm = normalize_tag(name)?;
+        let mut tags = self.read_tags_unlocked()?;
+        if !tags.contains(&norm) {
+            if tags.len() >= 500 {
+                return Err("受控标签最多维护 500 个".into());
+            }
+            tags.push(norm);
+            self.write_tags_unlocked(&tags)?;
+        }
+        Ok(tags)
+    }
+
+    pub fn tag_rename(&self, from: &str, to: &str) -> Result<Vec<String>, String> {
+        let _guard = self.lock()?;
+        let from_norm = normalize_tag(from)?;
+        let to_norm = normalize_tag(to)?;
+        let mut tags = self.read_tags_unlocked()?;
+        let Some(pos) = tags.iter().position(|t| t == &from_norm) else {
+            return Err(format!("标签「{from_norm}」不存在"));
+        };
+        if from_norm == to_norm {
+            return Ok(tags);
+        }
+        if tags.contains(&to_norm) {
+            tags.remove(pos);
+        } else {
+            tags[pos] = to_norm.clone();
+        }
+        let now = Self::now_secs()?;
+        for file in fs::read_dir(self.root.join("entries")).map_err(|_| "无法读取样板")? {
+            let path = file.map_err(|_| "无法读取样板")?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let mut entry: Entry =
+                serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取样板")?)
+                    .map_err(|_| "样板记录损坏")?;
+            if entry.tags.contains(&from_norm) {
+                let mut seen = std::collections::HashSet::new();
+                entry.tags = entry
+                    .tags
+                    .into_iter()
+                    .map(|t| if t == from_norm { to_norm.clone() } else { t })
+                    .filter(|t| seen.insert(t.clone()))
+                    .collect();
+                entry.revision = entry.revision.checked_add(1).ok_or("修订号无效")?;
+                entry.updated_at = now;
+                self.atomic_write(
+                    &path,
+                    &serde_json::to_vec_pretty(&entry).map_err(|_| "无法更新关联样板")?,
+                )?;
+            }
+        }
+        self.write_tags_unlocked(&tags)?;
+        Ok(tags)
+    }
+
+    pub fn tag_delete(&self, name: &str) -> Result<Vec<String>, String> {
+        let _guard = self.lock()?;
+        let norm = normalize_tag(name)?;
+        let mut tags = self.read_tags_unlocked()?;
+        let before = tags.len();
+        tags.retain(|t| t != &norm);
+        if tags.len() == before {
+            return Err(format!("标签「{norm}」不存在"));
+        }
+        let now = Self::now_secs()?;
+        for file in fs::read_dir(self.root.join("entries")).map_err(|_| "无法读取样板")? {
+            let path = file.map_err(|_| "无法读取样板")?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let mut entry: Entry =
+                serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取样板")?)
+                    .map_err(|_| "样板记录损坏")?;
+            let old_len = entry.tags.len();
+            entry.tags.retain(|t| t != &norm);
+            if entry.tags.len() != old_len {
+                entry.revision = entry.revision.checked_add(1).ok_or("修订号无效")?;
+                entry.updated_at = now;
+                self.atomic_write(
+                    &path,
+                    &serde_json::to_vec_pretty(&entry).map_err(|_| "无法更新关联样板")?,
+                )?;
+            }
+        }
+        self.write_tags_unlocked(&tags)?;
+        Ok(tags)
+    }
+
     fn validate_image_refs(&self, images: &[String]) -> Result<(), String> {
         if images.len() > 16 {
             return Err("每份样板最多保存 16 张图片".into());
@@ -196,14 +330,14 @@ impl LibraryStore {
                     .file_type()
                     .is_symlink()
             {
-                return Err("样板或参考图片不存在".into());
+                return Err("样板图片不存在，请先导入图片再引用".into());
             }
         }
         Ok(())
     }
 
     fn validate(&self, entry: &Entry) -> Result<(), String> {
-        if ![1, 2, 3, 4].contains(&entry.schema_version) {
+        if !(1..=5).contains(&entry.schema_version) {
             return Err("资产版本暂不支持".into());
         }
         if entry.name.trim().is_empty() || entry.name.chars().count() > 80 {
@@ -213,13 +347,13 @@ impl LibraryStore {
             return Err("正文文档过长".into());
         }
         if entry.sample.len() > 32_000 {
-            return Err("样板文字示例过长".into());
+            return Err("样板示例文字过长".into());
         }
-        if entry.tags.len() > 24
-            || entry.tags.iter().any(|tag| tag.chars().count() > 32)
-            || entry.notes.len() > 16_000
-        {
-            return Err("标签或备注过长（最多 24 个标签，单标签不超过 32 字）".into());
+        if entry.tags.len() > 24 || entry.notes.len() > 16_000 {
+            return Err("标签或备注过长（最多 24 个标签）".into());
+        }
+        for tag in &entry.tags {
+            normalize_tag(tag)?;
         }
         if entry
             .origin_created_at
@@ -256,7 +390,7 @@ impl LibraryStore {
         let entry: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取样板")?)
             .map_err(|_| "样板记录损坏")?;
         if entry.revision != expected_revision {
-            return Err("样板已在其他位置修改，请刷新后再删除".into());
+            return Err("样板已在其他位置修改，请先重新读取最新 revision 再删除".into());
         }
         fs::remove_file(&path).map_err(|_| "无法删除样板记录")?;
         if entry.kind == Kind::Skill {
@@ -384,6 +518,31 @@ impl LibraryStore {
         Ok(manifest)
     }
 
+    fn compute_state_token(tags: &[String], entries: &[Entry]) -> String {
+        let mut hasher = Sha256::new();
+        for t in tags {
+            hasher.update(t.as_bytes());
+            hasher.update(b"|");
+        }
+        hasher.update(b"##");
+        for e in entries {
+            hasher.update(e.id.as_bytes());
+            hasher.update(b":");
+            hasher.update(e.revision.to_le_bytes());
+            hasher.update(b":");
+            hasher.update(e.updated_at.to_le_bytes());
+            if let Some(d) = &e.skill_digest {
+                hasher.update(d.as_bytes());
+            }
+            hasher.update(b";");
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    pub fn state_token(&self) -> Result<String, String> {
+        Ok(self.list()?.state_token)
+    }
+
     pub fn list(&self) -> Result<Library, String> {
         let _guard = self.lock()?;
         let mut entries = Vec::new();
@@ -406,7 +565,7 @@ impl LibraryStore {
             entries.push(entry);
         }
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.name.cmp(&b.name)));
-        let mut tags = Vec::new();
+        let mut tags = self.read_tags_unlocked()?;
         for entry in &entries {
             for tag in &entry.tags {
                 if !tag.is_empty() && !tags.contains(tag) {
@@ -414,11 +573,12 @@ impl LibraryStore {
                 }
             }
         }
-        tags.sort();
+        let state_token = Self::compute_state_token(&tags, &entries);
         Ok(Library {
             tags,
             entries,
             image_directory: self.root.join("images").to_string_lossy().into_owned(),
+            state_token,
         })
     }
 
@@ -690,7 +850,7 @@ impl LibraryStore {
     pub fn open_skill_folder(&self, id: &str) -> Result<(), String> {
         let path = self.skill_path(id)?;
         if !path.is_dir() {
-            return Err("请先保存 Skill 文件夹".into());
+            return Err("Skill 文件夹不存在".into());
         }
         #[cfg(target_os = "macos")]
         let status = std::process::Command::new("/usr/bin/open")
@@ -720,6 +880,21 @@ impl LibraryStore {
     ) -> Result<Entry, String> {
         let _guard = self.lock()?;
         self.validate(&entry)?;
+        let registered_tags = self.read_tags_unlocked()?;
+        let mut normalized_tags = Vec::new();
+        for raw in &entry.tags {
+            let norm = normalize_tag(raw)?;
+            if !registered_tags.contains(&norm) {
+                return Err(format!(
+                    "标签「{norm}」尚未登记；请先调用 tag_add 创建该标签后再使用，确保 Tag 逐一受控维护"
+                ));
+            }
+            if !normalized_tags.contains(&norm) {
+                normalized_tags.push(norm);
+            }
+        }
+        entry.tags = normalized_tags;
+
         if entry.id.is_empty() {
             entry.id = Uuid::new_v4().to_string();
         }
@@ -728,30 +903,32 @@ impl LibraryStore {
             let old: Entry = serde_json::from_slice(&fs::read(&path).map_err(|_| "无法读取样板")?)
                 .map_err(|_| "样板记录损坏")?;
             if old.kind != entry.kind {
-                return Err("已有资产载体类型不能改变".into());
+                return Err("已有资产基础类型（prompt/skill）不能改变".into());
             }
             old.revision
         } else {
             0
         };
         if actual_revision != expected_revision {
-            return Err("样板已在其他位置修改，请返回样板间重新打开".into());
+            return Err("样板已在其他位置修改，请先读取最新 revision 再保存".into());
         }
         if entry.kind == Kind::Prompt && (entry.prompt.trim().is_empty() || files.is_some()) {
-            return Err("请填写提示词；文件夹属于 Skill".into());
+            return Err("提示词须填写 prompt 正文；文件夹属于 Skill".into());
         }
         if entry.kind == Kind::Skill && entry.skill_markdown.trim().is_empty() {
-            return Err("请填写或导入 SKILL.md".into());
+            return Err("Skill 须包含非空 SKILL.md".into());
         }
         let mut package = None;
         if entry.kind == Kind::Skill {
             let current = self.skill_document(&entry.id)?;
-            if current
-                .as_ref()
-                .map(|text| format!("{:x}", Sha256::digest(text.as_bytes())))
-                != entry.skill_digest
+            if current.is_some()
+                && entry.skill_digest.is_some()
+                && current
+                    .as_ref()
+                    .map(|text| format!("{:x}", Sha256::digest(text.as_bytes())))
+                    != entry.skill_digest
             {
-                return Err("SKILL.md 已在文件夹中修改，请返回样板间重新打开".into());
+                return Err("SKILL.md 已在磁盘被外部修改，请重新读取后再保存".into());
             }
             let directory = self.skill_path(&entry.id)?;
             let mut contents = if let Some(files) = files {
@@ -783,15 +960,8 @@ impl LibraryStore {
             }
             package = Some((staged, directory));
         }
-        entry.schema_version = 4;
+        entry.schema_version = 5;
         entry.name = entry.name.trim().into();
-        let mut seen = std::collections::HashSet::new();
-        entry.tags = entry
-            .tags
-            .into_iter()
-            .map(|tag| tag.trim().trim_start_matches('#').trim().to_string())
-            .filter(|tag| !tag.is_empty() && seen.insert(tag.clone()))
-            .collect();
         entry.revision = actual_revision.checked_add(1).ok_or("修订号无效")?;
         entry.updated_at = Self::now_secs()?;
         let mut record = entry.clone();
@@ -871,23 +1041,13 @@ impl LibraryStore {
         Ok(name)
     }
 
-    pub fn import_image(&self, data_url: &str) -> Result<String, String> {
-        if data_url.len() > 17_000_000 {
-            return Err("单张图片请控制在 12 MB 以内".into());
+    pub fn import_image_file(&self, path: &Path) -> Result<String, String> {
+        let meta = fs::metadata(path).map_err(|_| "无法读取图片文件")?;
+        if !meta.is_file() || meta.len() > 12 * 1024 * 1024 {
+            return Err("图片必须是 12 MB 以内的普通文件".into());
         }
-        let (header, encoded) = data_url.split_once(',').ok_or("图片格式无效")?;
-        let expected = match header {
-            "data:image/png;base64" => "png",
-            "data:image/jpeg;base64" => "jpg",
-            "data:image/webp;base64" => "webp",
-            _ => return Err("支持 PNG、JPEG 与 WebP 图片".into()),
-        };
-        let bytes = STANDARD.decode(encoded).map_err(|_| "图片数据无效")?;
-        let name = self.import_image_bytes(&bytes)?;
-        if !name.ends_with(&format!(".{expected}")) {
-            return Err("图片内容与格式不一致".into());
-        }
-        Ok(name)
+        let bytes = fs::read(path).map_err(|_| "无法读取图片字节")?;
+        self.import_image_bytes(&bytes)
     }
 }
 
@@ -896,28 +1056,8 @@ pub async fn library_list(store: tauri::State<'_, LibraryStore>) -> Result<Libra
     store.list()
 }
 #[tauri::command]
-pub async fn library_save(
-    store: tauri::State<'_, LibraryStore>,
-    entry: Entry,
-    expected_revision: u64,
-    files: Option<Vec<ImportFile>>,
-) -> Result<Entry, String> {
-    store.save(entry, expected_revision, files)
-}
-#[tauri::command]
-pub async fn library_delete(
-    store: tauri::State<'_, LibraryStore>,
-    id: String,
-    expected_revision: u64,
-) -> Result<(), String> {
-    store.delete_entry(&id, expected_revision)
-}
-#[tauri::command]
-pub async fn library_import_image(
-    store: tauri::State<'_, LibraryStore>,
-    data_url: String,
-) -> Result<String, String> {
-    store.import_image(&data_url)
+pub async fn library_state_token(store: tauri::State<'_, LibraryStore>) -> Result<String, String> {
+    store.state_token()
 }
 #[tauri::command]
 pub async fn library_skill_files(
@@ -939,14 +1079,14 @@ mod tests {
     use super::*;
     fn entry() -> Entry {
         Entry {
-            schema_version: 4,
+            schema_version: 5,
             id: String::new(),
             kind: Kind::Prompt,
             modality: Modality::Image,
             name: "安静角色设定".into(),
             prompt: "蛋黄黄乱发、黑卫衣、粗蜡笔纸纹".into(),
             sample: "安静站在白板旁微笑".into(),
-            tags: vec!["#安静".into(), "粗蜡笔".into(), "安静".into()],
+            tags: vec![],
             notes: String::new(),
             origin_created_at: None,
             origin_updated_at: None,
@@ -960,32 +1100,37 @@ mod tests {
     }
 
     #[test]
-    fn tags_normalize_deduplicate_and_snapshot_preserves_atomic_prompts_and_refs() {
+    fn controlled_tags_enforce_registration_and_cascade_rename_and_delete() {
         let root = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(root.path().join("library")).unwrap();
-        let bytes = include_bytes!("../icons/32x32.png");
-        let img = store.import_image_bytes(bytes).unwrap();
+
+        // Saving with an unregistered tag must fail
+        let mut unregistered = entry();
+        unregistered.tags = vec!["安静".into()];
+        assert!(store.save(unregistered, 0, None).is_err());
+
+        // Register tags explicitly one by one
+        store.tag_add("#安静").unwrap();
+        store.tag_add("计算机").unwrap();
+        assert_eq!(store.tag_list().unwrap(), vec!["安静", "计算机"]);
+
         let mut item = entry();
-        item.images = vec![img.clone()];
+        item.tags = vec!["#安静".into(), "计算机".into()];
         let saved = store.save(item, 0, None).unwrap();
-        assert_eq!(saved.tags, vec!["安静", "粗蜡笔"]);
-        assert_eq!(store.list().unwrap().tags, vec!["安静", "粗蜡笔"]);
+        assert_eq!(saved.tags, vec!["安静", "计算机"]);
+        let token_before = store.state_token().unwrap();
 
-        let snap = root.path().join("snap-1");
-        let manifest = store
-            .snapshot_assets("builtin:image-single", std::slice::from_ref(&saved.id), &snap)
-            .unwrap();
-        assert_eq!(manifest.prompts.len(), 1);
-        assert!(snap.join("prompts.md").is_file());
-        assert!(snap.join("skill/SKILL.md").is_file());
-        assert!(snap.join("references").join(&img).is_file());
-        assert!(fs::read_to_string(snap.join("prompts.md"))
-            .unwrap()
-            .contains("#安静"));
+        // Renaming a tag updates controlled list and cascades to entries
+        store.tag_rename("计算机", "技术").unwrap();
+        assert_eq!(store.tag_list().unwrap(), vec!["安静", "技术"]);
+        let after_rename = &store.list().unwrap().entries[0];
+        assert_eq!(after_rename.tags, vec!["安静", "技术"]);
+        assert_ne!(store.state_token().unwrap(), token_before);
 
-        assert!(store.delete_entry(&saved.id, 0).is_err());
-        store.delete_entry(&saved.id, saved.revision).unwrap();
-        assert!(store.list().unwrap().entries.is_empty());
+        // Deleting a tag removes it from controlled list and strips from entries
+        store.tag_delete("技术").unwrap();
+        let after_delete = &store.list().unwrap().entries[0];
+        assert_eq!(after_delete.tags, vec!["安静"]);
     }
 
     #[test]
@@ -1038,62 +1183,16 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_skill_swap_recovers_from_metadata_commit_point() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = LibraryStore::new(dir.path().into()).unwrap();
-        let mut skill = entry();
-        skill.kind = Kind::Skill;
-        skill.prompt.clear();
-        skill.skill_markdown = "# Original".into();
-        let saved = store.save(skill, 0, None).unwrap();
-        let package = store.skill_path(&saved.id).unwrap();
-        let staged = format!(".stage-{}", Uuid::new_v4());
-        let backup = format!(".previous-{}", Uuid::new_v4());
-        fs::create_dir(dir.path().join("skills").join(&staged)).unwrap();
-        fs::write(
-            dir.path().join("skills").join(&staged).join("SKILL.md"),
-            "# Uncommitted",
-        )
-        .unwrap();
-        fs::rename(&package, dir.path().join("skills").join(&backup)).unwrap();
-        fs::rename(dir.path().join("skills").join(&staged), &package).unwrap();
-        let tx = SkillTransaction {
-            id: saved.id.clone(),
-            staged,
-            backup: Some(backup),
-            revision: 2,
-        };
-        let journal = dir
-            .path()
-            .join("skills")
-            .join(format!(".transaction-{}.json", saved.id));
-        fs::write(&journal, serde_json::to_vec(&tx).unwrap()).unwrap();
-        let reopened = LibraryStore::new(dir.path().into()).unwrap();
-        assert_eq!(
-            reopened.list().unwrap().entries[0].skill_markdown,
-            "# Original"
-        );
-        assert!(!journal.exists());
-    }
-
-    #[test]
     fn imports_preserve_bytes_and_deduplicate_but_reject_fake_formats() {
         let dir = tempfile::tempdir().unwrap();
         let store = LibraryStore::new(dir.path().into()).unwrap();
         let bytes = include_bytes!("../icons/32x32.png");
-        let data = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
-        let name = store.import_image(&data).unwrap();
-        assert_eq!(name, store.import_image(&data).unwrap());
+        let name = store.import_image_bytes(bytes).unwrap();
+        assert_eq!(name, store.import_image_bytes(bytes).unwrap());
         assert_eq!(
             fs::read(dir.path().join("images").join(&name)).unwrap(),
             bytes
         );
-        assert!(store.import_image("data:image/png;base64,YmFk").is_err());
-        let mut bad = entry();
-        bad.images = vec!["../../outside.png".into()];
-        assert!(store.save(bad, 0, None).is_err());
-        let mut bad = entry();
-        bad.id = "../outside".into();
-        assert!(store.save(bad, 0, None).is_err());
+        assert!(store.import_image_bytes(b"bad").is_err());
     }
 }

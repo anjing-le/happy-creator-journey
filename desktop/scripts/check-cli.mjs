@@ -11,22 +11,30 @@ function call(args, input) {
   assert.equal(response.ok, true); return response.data;
 }
 try {
-  assert.equal(call(['schema']).name, 'CreatorX CLI');
+  assert.equal(call(['schema']).mcp.command, 'creatorx mcp');
+  call(['tag', 'add', '--name', '安静']);
   const first = call(['library', 'save', '--stdin'], JSON.stringify({
     kind: 'prompt',
     modality: 'image',
     name: '安静角色设定',
     prompt: '蛋黄黄乱发、黑卫衣、粗蜡笔',
-    tags: ['#安静', '生图'],
+    tags: ['安静'],
   }));
   assert.equal(first.revision, 1);
-  assert.deepEqual(first.tags, ['安静', '生图']);
-  assert.equal(call(['library', 'get', first.id]).prompt, first.prompt);
   assert.equal(call(['library', 'list', '--modality', 'image', '--tag', '安静']).count, 1);
-  assert.deepEqual(call(['library', 'tags']), ['安静', '生图']);
   const stale = spawnSync(binary, ['library', 'save', '--stdin', '--if-revision', '0'], { env, input: JSON.stringify(first), encoding: 'utf8', timeout: 15_000 });
-  assert.equal(stale.status, 1); assert.equal(JSON.parse(stale.stderr).ok, false);
+  assert.equal(stale.status, 1);
+
+  const mcpOut = execFileSync(binary, ['mcp'], {
+    env,
+    input: `${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })}\n`,
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  const parsed = JSON.parse(mcpOut.trim());
+  assert.ok(parsed.result.tools.some(t => t.name === 'creatorx_prompt_save'));
+
   call(['library', 'delete', first.id, '--if-revision', String(first.revision)]);
   assert.equal(call(['library', 'list']).count, 0);
-  console.log('Packaged native CLI: JSON output, atomic modality + tag filtering, delete and stale-write protection passed.');
+  console.log('Packaged native MCP + CLI: controlled tags, JSON-RPC stdio MCP, delete and stale-write protection passed.');
 } finally { rmSync(root, { recursive: true, force: true }); }

@@ -6,22 +6,18 @@
 
 - GitHub：https://github.com/anjing-le/happy-creator-journey
 - 本机仓库：`/Users/lvxianghe/project/anjing/happy-creator-journey`
-- 本机正式安装：`~/Applications/CreatorX.app`（当前基线 `0.1.1`）
-- 阅读顺序：`AGENTS.md` → `design.md` → `desktop/ARCHITECTURE.md` → `desktop/AGENTS.md`，按任务查阅 `desktop/README.md`、`desktop/CLI.md`、`desktop/icon-validation.md`。
+- 本机正式安装：`~/Applications/CreatorX.app`（当前基线 `0.1.2`）
+- 本机 Antigravity MCP 注册：`~/.gemini/config/mcp_config.json`（指向 `~/Applications/CreatorX.app/Contents/MacOS/creatorx mcp`）
+- 阅读顺序：`AGENTS.md` → `design.md` → `desktop/ARCHITECTURE.md` → `desktop/AGENTS.md` → `desktop/CLI.md`。
 
-## 已确认并落地的极简架构（`0.1.1`）
+## 已落地的核心设计（`0.1.2`）
 
-1. **不做新 Agent，只做极简 Creation Harness**：连接本机已登录的 Agent（`CodexAdapter` 已打通 `codex app-server`，`AntigravityAdapter` 预留本地槽位），零凭据托管；保持可复用骨架与个人私有数据分离。
-2. **去掉“IP 底座”与多重分类表单，回归底层原子积木**：
-   - 最底层的创作能力只有 **生文（`文`）**、**生图（`图`）**、**生视频（`视频`）**；
-   - 样板间每条资产只含 4 要素：**载体（`提示词`／`Skill` 文件夹）**、**原子方向（`文`／`图`／`视频`）**、**样板展示（样板图或文字样例）**、**`#Tags`（如 `#安静`、`#计算机`、`#金融`，编辑器内置历史标签点选复用）**；
-   - 内置仅保留 3 个细粒度生图原子 Skill：`单张生图`、`系列套图`、`原图微调`。
-3. **上层组合创作台（图文 ／ 视频）**：
-   - 首页上方为 **图文**、**视频** 两块无字蜡笔插画，下方整行为 **样板间**；
-   - 创作台左侧自然交流，按 `文 / 图 / 视频` 与 `#Tag` 快速勾选组合提示词和细粒度 Skill（自动冻结只读快照 `snapshots/<seq>/`）；右侧呈现 `draft.md` 定稿文稿与生图／微调版本卡片（校验真实图片文件头、改图引用真实原图且不覆盖旧版，支持一键加 `#Tag` 沉淀回样板间）。
+1. **客户端零 CRUD 界面**：移除所有添加、编辑、删除、搜索框与内联表单。前端只做两件事：**纯只读样板间画册**（按 `提示词/Skill`、`文/图/视频`、`#Tag` 切换浏览，自动监听 `stateToken` 无感热刷新）与**纯净创作台**（图文／视频对话＋勾选引用已有样板＋右侧只读作品展示）。
+2. **最简受控数据模型**：基础类型仅 `prompt`｜`skill` 两种；方向仅 `text`｜`image`｜`video` 三种；Tag 通过 `tags.json` 受控表逐一维护（未先登记的 Tag 拒绝挂载，重命名／删除自动级联更新）。
+3. **内置 `creatorx mcp` ＋ CLI 双通道**：任何支持 MCP 或 CLI 的 Agent（Antigravity、Codex、Claude Code 等）均可脱离窗口进程直接维护 Tag、提示词、真实 Skill 文件夹和样板图片，共用文件锁与 `revision` 并发保护。
 
 ## 本机数据与待验证边界
 
-- 旧版数据已安全备份在 `~/Library/Application Support/cc.anjing.creatorx/archive-v0.0.17/`（41 条提示词、16 张参考图、1 个私人 Skill、1 条创作记录）；当前 `library/` 从零干净积累。
-- 本机安装版退出透明图标通过 `desktop/scripts/macos-file-icon.swift` 本地定制，不进入公开安装包。
-- 待验证项：OTA 自动重启后的窗口唤起异常待排查；鼠标侧键待真鼠实测；Windows 真机交互、平台代码签名／公证及视频渲染细粒度工具按后续实际创作逐步推进。
+- 旧版数据完整备份在 `~/Library/Application Support/cc.anjing.creatorx/archive-v0.0.17/`（41 条提示词、16 张参考图、1 个私人 Skill、1 条创作记录）；当前活动 `library/` 保持空库待逐条维护。
+- 本机安装版无底板透明图标由 `desktop/scripts/macos-file-icon.swift` 在干净验签后本地设置，不进入公开安装包。
+- 待验证项：OTA 自动重启后的窗口唤起异常待排查；鼠标侧键待真鼠实测；Windows 真机交互与平台代码签名／公证待推进。

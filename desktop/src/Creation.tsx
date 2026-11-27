@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core';
 import Markdown from 'react-markdown';
 import { Choice } from './Choice';
-import { TagPicker } from './Showcase';
 import { StudioEntrance, StudioLaunch } from './navigation';
-import { AssetEntry, AssetLibrary, MODALITY_LABELS, Modality, loadLibrary } from './library';
+import { AssetEntry, AssetLibrary, MODALITY_LABELS, Modality, loadLibrary, loadLibraryToken } from './library';
 
 interface AdapterStatus {
   id: string;
@@ -43,7 +42,7 @@ const errText = (e: unknown) => e instanceof Error ? e.message : String(e);
 export function Creation({ name, launch, back }: { name: StudioEntrance; launch?: StudioLaunch; back: () => void }) {
   const mode = name === '视频' ? 'video' : 'image_text';
   const [builtins, setBuiltins] = useState<AssetEntry[]>([]);
-  const [library, setLibrary] = useState<AssetLibrary>({ entries: [], imageDirectory: '', tags: [] });
+  const [library, setLibrary] = useState<AssetLibrary>({ entries: [], imageDirectory: '', tags: [], stateToken: '' });
   const [adapters, setAdapters] = useState<AdapterStatus[]>([]);
   const [adapterId, setAdapterId] = useState('codex');
   const [jobs, setJobs] = useState<CreationJob[]>([]);
@@ -59,14 +58,6 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [enlarged, setEnlarged] = useState<string>();
-  const [revisingTaskId, setRevisingTaskId] = useState('');
-  const [reviseNote, setReviseNote] = useState('');
-  const [promoteTarget, setPromoteTarget] = useState<CreationJob>();
-  const [promoteName, setPromoteName] = useState('');
-  const [promoteModality, setPromoteModality] = useState<Modality>('image');
-  const [promotePrompt, setPromotePrompt] = useState('');
-  const [promoteTags, setPromoteTags] = useState<string[]>([]);
-  const [notice, setNotice] = useState('');
 
   const zoomRef = useRef<HTMLDialogElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -74,6 +65,7 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
   const followRef = useRef(true);
   const hydratedRef = useRef('');
   const handledLaunchRef = useRef<number | undefined>(undefined);
+  const tokenRef = useRef('');
   const jobsRef = useRef(jobs); jobsRef.current = jobs;
   const submittingRef = useRef(submitting); submittingRef.current = submitting;
 
@@ -102,21 +94,33 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
   useEffect(() => {
     if (!native) return;
     let disposed = false;
-    const syncAssets = () => {
-      void loadLibrary().then(lib => { if (!disposed) setLibrary(lib); }).catch(e => { if (!disposed) setError(errText(e)); });
+    const syncAssets = async () => {
+      try {
+        const lib = await loadLibrary();
+        if (!disposed) {
+          tokenRef.current = lib.stateToken;
+          setLibrary(lib);
+        }
+      } catch (e) {
+        if (!disposed) setError(errText(e));
+      }
     };
-    void invoke<AssetEntry[]>('creation_builtin_skills').then(b => { if (!disposed) setBuiltins(b); }).catch(e => setError(errText(e)));
-    syncAssets();
+    void invoke<AssetEntry[]>('creation_builtin_skills').then(b => { if (!disposed) setBuiltins(b); }).catch(e => { if (!disposed) setError(errText(e)); });
+    void syncAssets();
     void probeAdapters('codex');
     void refreshJobs().catch(e => setError(errText(e)));
     void invoke<string>('creation_directory').then(d => { if (!disposed) setDirectory(d); }).catch(e => setError(errText(e)));
-    const onFocus = () => { syncAssets(); void refreshJobs().catch(e => setError(errText(e))); };
+    const onFocus = () => { void syncAssets(); void refreshJobs().catch(e => setError(errText(e))); };
     window.addEventListener('focus', onFocus);
     const timer = setInterval(() => {
-      if (!disposed && document.visibilityState === 'visible' && (submittingRef.current || jobsRef.current.some(busy))) {
+      if (disposed || document.visibilityState !== 'visible') return;
+      if (submittingRef.current || jobsRef.current.some(busy)) {
         void refreshJobs().catch(e => setError(errText(e)));
       }
-    }, 900);
+      void loadLibraryToken().then(tok => {
+        if (tok && tok !== tokenRef.current) void syncAssets();
+      }).catch(() => {});
+    }, 1000);
     return () => { disposed = true; clearInterval(timer); window.removeEventListener('focus', onFocus); };
   }, []);
 
@@ -128,7 +132,6 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
       setSkillId(launch.skillId || '');
       setPromptIds(launch.promptId ? [launch.promptId] : []);
       setAttachmentsDirty(false);
-      setPromoteTarget(undefined);
       composerRef.current?.focus();
     }
   }, [launch?.nonce]);
@@ -144,7 +147,6 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
       setSkillId(job.skillId || '');
       setPromptIds(job.promptIds || []);
       setAttachmentsDirty(false);
-      setPromoteTarget(undefined);
     }
   }, [job?.id]);
 
@@ -163,7 +165,6 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
     setPromptIds(target?.promptIds || []);
     setAttachmentsDirty(false);
     setPickerOpen(false);
-    setPromoteTarget(undefined);
     setText('');
     setError('');
     followRef.current = true;
@@ -208,52 +209,6 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
     }
   }
 
-  async function submitReviseImage(sourceTaskId: string) {
-    if (!job || !reviseNote.trim()) return;
-    setError('');
-    try {
-      await invoke<CreationJob>('creation_revise_image', {
-        parentId: job.id,
-        sourceTaskId,
-        intent: reviseNote.trim(),
-      });
-      setRevisingTaskId('');
-      setReviseNote('');
-      await refreshJobs();
-    } catch (e) { setError(errText(e)); }
-  }
-
-  function openPromote(target: CreationJob, defaultModality: Modality) {
-    setPromoteTarget(target);
-    setPromoteModality(defaultModality);
-    setPromoteName(target.title);
-    setPromotePrompt(target.parentId ? target.title : '');
-    setPromoteTags([]);
-  }
-
-  async function savePromotedShowcase() {
-    if (!promoteTarget || !promoteName.trim() || !promotePrompt.trim()) return;
-    setSubmitting(true); setError('');
-    try {
-      await invoke('creation_promote_showcase', {
-        request: {
-          targetJobId: promoteTarget.id,
-          modality: promoteModality,
-          name: promoteName.trim(),
-          prompt: promotePrompt.trim(),
-          sample: promoteTarget.draftMarkdown.slice(0, 1200),
-          tags: promoteTags,
-          notes: '',
-        },
-      });
-      setPromoteTarget(undefined);
-      setNotice('已存入样板间');
-      setTimeout(() => setNotice(''), 2200);
-      setLibrary(await loadLibrary());
-    } catch (e) { setError(errText(e)); }
-    finally { setSubmitting(false); }
-  }
-
   const imageSrc = (ownerId: string, rel: string) => convertFileSrc(`${directory}/${ownerId}/${rel}`);
   const locked = submitting || busy(job);
   const activeAdapter = adapters.find(a => a.id === adapterId);
@@ -274,7 +229,7 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
           className="chat-session-select"
           label="切换创作会话"
           value={job?.id || ''}
-          options={[{ value: '', label: '新创作' }, ...[...mainJobs].reverse().map(j => ({ value: j.id, label: j.title }))]}
+          options={[{ value: '', label: '新对话' }, ...[...mainJobs].reverse().map(j => ({ value: j.id, label: j.title }))]}
           onChange={id => selectJob(mainJobs.find(j => j.id === id))}
         />
         <span className="header-space" />
@@ -291,7 +246,7 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
         <button className="text-button codex-connection" onClick={() => { void probeAdapters(adapterId); }}>
           {activeAdapter ? (activeAdapter.available ? '已就绪' : '检查连接') : '连接中…'}
         </button>
-        <button className="icon-button" aria-label="新建创作" onClick={() => selectJob()} disabled={submitting}>＋</button>
+        <button className="icon-button" aria-label="开启新对话" onClick={() => selectJob()} disabled={submitting}>＋</button>
       </header>
 
       <div className="chat-layout studio-layout">
@@ -306,7 +261,7 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
           >
             {!job && (
               <div className="chat-empty studio-welcome">
-                <p>{name === '视频' ? '和 Agent 聊聊视频想法，按需勾选文／图／视频样板组合创作' : '和 Agent 聊聊图文想法，按需勾选 #安静 或画风／文风样板组合生成'}</p>
+                <p>{name === '视频' ? '和 Agent 聊聊视频想法' : '和 Agent 聊聊图文想法'}</p>
                 {activeAdapter?.detail && !activeAdapter.available && <small className="adapter-hint">{activeAdapter.detail}</small>}
               </div>
             )}
@@ -334,8 +289,7 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
 
           <div className="chat-composer-area">
             {(error || job?.error) && <p className="inline-error" role="alert">{error || job?.error}</p>}
-            {notice && <p className="inline-notice" role="status">{notice}</p>}
-            <div className="chat-composer" data-editing={(text.trim() || promoteTarget) ? '' : undefined}>
+            <div className="chat-composer" data-editing={text.trim() ? '' : undefined}>
               {pickerOpen && (
                 <div className="chat-materials">
                   <div className="picker-filters">
@@ -359,23 +313,27 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
                   </div>
                   <div className="picker-list">
                     {pickerPrompts.length === 0 ? (
-                      <p className="sidebar-note">没有匹配的提示词样板，可直接对话或先去样板间添加。</p>
-                    ) : pickerPrompts.map(p => (
-                      <label key={p.id} className="picker-item">
-                        <input
-                          type="checkbox"
-                          checked={promptIds.includes(p.id)}
-                          disabled={locked || (!promptIds.includes(p.id) && promptIds.length >= 16)}
-                          onChange={e => {
-                            setPromptIds(old => e.target.checked ? [...old, p.id] : old.filter(id => id !== p.id));
+                      <p className="sidebar-note">样板间暂无对应提示词</p>
+                    ) : pickerPrompts.map(p => {
+                      const active = promptIds.includes(p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          disabled={locked || (!active && promptIds.length >= 16)}
+                          className={`picker-item ${active ? 'selected' : ''}`}
+                          onClick={() => {
+                            setPromptIds(old => active ? old.filter(id => id !== p.id) : [...old, p.id]);
                             setAttachmentsDirty(true);
                           }}
-                        />
-                        <span className="badge format">{MODALITY_LABELS[p.modality]}</span>
-                        <span className="picker-name">{p.name}</span>
-                        {p.tags.map(t => <small key={t} className="badge">#{t}</small>)}
-                      </label>
-                    ))}
+                        >
+                          <span className="choice-check" aria-hidden="true">{active ? '✓' : ''}</span>
+                          <span className="badge format">{MODALITY_LABELS[p.modality]}</span>
+                          <span className="picker-name">{p.name}</span>
+                          {p.tags.map(t => <small key={t} className="badge">#{t}</small>)}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -402,7 +360,7 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
               <textarea
                 ref={composerRef}
                 autoFocus
-                aria-label="输入创作想法"
+                aria-label="与 Agent 交流"
                 value={text}
                 rows={3}
                 onChange={e => setText(e.target.value)}
@@ -412,30 +370,29 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
                     void send();
                   }
                 }}
-                placeholder="说说你想写的内容、要出的图或视频脚本…"
+                placeholder="输入想法或修改意见…"
               />
               <div className="chat-composer-toolbar">
                 <button
                   className={`text-button context-btn ${pickerOpen ? 'active' : ''}`}
-                  aria-label="引用提示词样板"
+                  aria-label="引用提示词"
                   aria-expanded={pickerOpen}
                   onClick={() => setPickerOpen(!pickerOpen)}
                 >
-                  ＋ 引用提示词{promptIds.length ? ` (${promptIds.length})` : ''}
+                  ＋ 提示词{promptIds.length ? ` · ${promptIds.length}` : ''}
                 </button>
                 <Choice
                   className="composer-skill"
-                  label="选择细粒度 Skill"
+                  label="选择 Skill"
                   value={skillId}
                   disabled={locked}
                   options={[
-                    { value: '', label: '选择 Skill（可选）' },
-                    ...builtins.map(s => ({ value: s.id, label: s.name, group: '内置原子 Skills' })),
-                    ...allSkills.filter(s => !s.id.startsWith('builtin:')).map(s => ({ value: s.id, label: s.name, group: '我的 Skills' })),
+                    { value: '', label: '选择 Skill' },
+                    ...builtins.map(s => ({ value: s.id, label: s.name, group: '内置' })),
+                    ...allSkills.filter(s => !s.id.startsWith('builtin:')).map(s => ({ value: s.id, label: s.name, group: '我的 Skill' })),
                   ]}
                   onChange={id => { setSkillId(id); setAttachmentsDirty(true); }}
                 />
-                {job && <span className="chat-attached">快照 #{job.snapshotSeq}</span>}
                 <span className="header-space" />
                 {busy(job) ? (
                   <button
@@ -459,57 +416,17 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
           </div>
         </div>
 
-        <aside className="creation-results harness-canvas" aria-label="生成内容与作品版本">
-          {promoteTarget && (
-            <div className="promote-box">
-              <h3>沉淀到样板间</h3>
-              <div className="editor-top-row">
-                <input value={promoteName} maxLength={80} onChange={e => setPromoteName(e.target.value)} placeholder="样板名称" />
-                <div className="segmented-pills">
-                  {(['text', 'image', 'video'] as const).map(m => (
-                    <button key={m} type="button" className={promoteModality === m ? 'active' : ''} onClick={() => setPromoteModality(m)}>
-                      {MODALITY_LABELS[m]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <TagPicker tags={promoteTags} knownTags={library.tags} onChange={setPromoteTags} />
-              <textarea
-                className="instructions-editor compact-textarea"
-                value={promotePrompt}
-                onChange={e => setPromotePrompt(e.target.value)}
-                placeholder="填写这条可复用的提示词正文"
-              />
-              <div className="promote-actions">
-                <button className="text-button" onClick={() => setPromoteTarget(undefined)}>取消</button>
-                <button className="text-button primary-action" disabled={submitting || !promoteName.trim() || !promotePrompt.trim()} onClick={() => { void savePromotedShowcase(); }}>
-                  存入样板间
-                </button>
-              </div>
-            </div>
-          )}
-
+        <aside className="creation-results harness-canvas" aria-label="作品展示">
           <div className="canvas-scroll">
             {!job || (!job.draftMarkdown.trim() && childTasks.length === 0) ? (
               <div className="results-empty">
                 <span aria-hidden="true">◇</span>
-                <p>定稿文案与生成的各版图片／素材会保存在这里</p>
+                <p>作品会呈现在这里</p>
               </div>
             ) : (
               <>
                 {job.draftMarkdown.trim() && (
                   <section className="canvas-copy-card">
-                    <header>
-                      <span className="sample-kicker">定稿文稿／脚本（draft.md）</span>
-                      <div className="gate-actions">
-                        <button className="text-button" onClick={() => { void navigator.clipboard.writeText(job.draftMarkdown).then(() => { setNotice('已复制文稿'); setTimeout(() => setNotice(''), 1600); }); }}>
-                          复制文稿
-                        </button>
-                        <button className="text-button" onClick={() => openPromote(job, mode === 'video' ? 'video' : 'text')}>
-                          ✦ 存为样板
-                        </button>
-                      </div>
-                    </header>
                     <pre className="prompt-body">{job.draftMarkdown}</pre>
                   </section>
                 )}
@@ -519,52 +436,17 @@ export function Creation({ name, launch, back }: { name: StudioEntrance; launch?
                     <header>
                       <span className={`task-dot ${busy(task) ? 'running' : task.error ? 'failed' : 'done'}`} />
                       <strong className="task-title">{task.title}</strong>
-                      {task.sourceTaskId && <span className="badge">基于原图微调</span>}
-                      <small>{busy(task) ? '生成中…' : task.status === 'completed' && !task.error ? '已完成' : '未完成'}</small>
+                      <small className="slot-id-note">{task.id.slice(0, 8)}</small>
                     </header>
-
-                    {busy(task) && <p className="chat-activity" role="status">{task.activity || '生图子会话执行中…'}</p>}
+                    {busy(task) && <p className="chat-activity" role="status">{task.activity || '生成中…'}</p>}
                     {task.error && <p className="inline-error" role="alert">{task.error}</p>}
-
                     {task.images.length > 0 && (
                       <div className="result-images">
                         {task.images.map((rel, i) => (
-                          <button key={rel} className="slot-image-btn" aria-label={`放大图片 ${i + 1}`} onClick={() => setEnlarged(imageSrc(task.id, rel))}>
-                            <img src={imageSrc(task.id, rel)} alt={`生成结果 ${i + 1}`} loading="lazy" />
+                          <button key={rel} className="slot-image-btn" aria-label={`查看原图 ${i + 1}`} onClick={() => setEnlarged(imageSrc(task.id, rel))}>
+                            <img src={imageSrc(task.id, rel)} alt={`作品 ${i + 1}`} loading="lazy" />
                           </button>
                         ))}
-                      </div>
-                    )}
-
-                    {revisingTaskId === task.id ? (
-                      <div className="slot-revise-bar">
-                        <input
-                          autoFocus
-                          value={reviseNote}
-                          onChange={e => setReviseNote(e.target.value)}
-                          placeholder="说明基于这张原图要微调什么…"
-                          onKeyDown={e => { if (e.key === 'Enter') void submitReviseImage(task.id); }}
-                        />
-                        <button className="text-button primary-action" onClick={() => { void submitReviseImage(task.id); }}>生成新版</button>
-                        <button className="text-button" onClick={() => setRevisingTaskId('')}>取消</button>
-                      </div>
-                    ) : (
-                      <div className="slot-card-actions">
-                        {task.images.length > 0 && !busy(task) && (
-                          <>
-                            <button className="text-button" onClick={() => { setRevisingTaskId(task.id); setReviseNote(''); }}>
-                              基于原图微调
-                            </button>
-                            <button className="text-button" onClick={() => openPromote(task, 'image')}>
-                              ✦ 存为样板
-                            </button>
-                          </>
-                        )}
-                        {busy(task) && (
-                          <button className="text-button" onClick={() => { void invoke('creation_cancel', { id: task.id }).then(refreshJobs).catch(e => setError(errText(e))); }}>
-                            停止此任务
-                          </button>
-                        )}
                       </div>
                     )}
                   </article>

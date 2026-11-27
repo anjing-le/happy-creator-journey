@@ -1,29 +1,10 @@
-//! Local CLI: invokes the same store as the desktop app without launching a webview.
-use crate::library::{Entry, ImportFile, Kind, LibraryStore, Modality};
-use base64::{engine::general_purpose::STANDARD, Engine};
-use serde_json::{json, Value};
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
+//! Local CLI & MCP entrypoint sharing the exact same locked local store as the desktop viewer.
+use crate::{
+    library::LibraryStore,
+    mcp::{call_tool, default_library_root, run_stdio},
 };
-
-fn default_root() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("CREATORX_LIBRARY_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    #[cfg(target_os = "windows")]
-    let base = PathBuf::from(std::env::var_os("APPDATA").ok_or("APPDATA is missing")?);
-    #[cfg(target_os = "macos")]
-    let base = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is missing")?)
-        .join("Library/Application Support");
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or(
-            PathBuf::from(std::env::var_os("HOME").ok_or("HOME is missing")?).join(".local/share"),
-        );
-    Ok(base.join("cc.anjing.creatorx/library"))
-}
+use serde_json::{json, Value};
+use std::io::{Read, Write};
 
 fn option(args: &[String], key: &str) -> Result<Option<String>, String> {
     if let Some(index) = args.iter().position(|arg| arg == key) {
@@ -37,46 +18,34 @@ fn option(args: &[String], key: &str) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-fn parse_modality(value: &str) -> Result<Modality, String> {
-    match value {
-        "text" => Ok(Modality::Text),
-        "image" => Ok(Modality::Image),
-        "video" => Ok(Modality::Video),
-        _ => Err("modality must be text, image, or video".into()),
-    }
-}
-
 fn schema() -> Value {
     json!({
-        "name":"CreatorX CLI",
-        "version":env!("CARGO_PKG_VERSION"),
-        "commands":[
-            {"usage":"schema","effect":"read-only command and data schema"},
-            {"usage":"library list [--kind prompt|skill] [--modality text|image|video] [--tag TAG] [--search TEXT]","effect":"read local showcase entries"},
-            {"usage":"library tags","effect":"read deduplicated tags across all entries"},
-            {"usage":"library get ID","effect":"read complete entry and prompt/SKILL.md"},
-            {"usage":"library save (--stdin | --file JSON) [--if-revision N]","effect":"create/update entry; updates require current revision; Skill saves create/update a real folder"},
-            {"usage":"library delete ID --if-revision N","effect":"delete entry with revision check"},
-            {"usage":"library import-skill --folder PATH [--name NAME] [--modality text|image|video] [--tags TAG1,TAG2]","effect":"copy complete folder locally; scripts are never executed"},
-            {"usage":"library skill-files ID","effect":"read relative package file paths"},
-            {"usage":"library import-image --file PATH","effect":"copy and deduplicate showcase/reference image bytes locally"}
-        ],
-        "entry":{
-            "kind":"prompt|skill",
-            "modality":"text|image|video",
-            "name":"required",
-            "prompt":"required for prompt",
-            "skillMarkdown":"SKILL.md for skill",
-            "sample":"sample text output or showcase summary",
-            "tags":"string[] (e.g. [\"安静\", \"粗蜡笔\", \"计算机\"])",
-            "notes":"string",
-            "images":"stored image hashes",
-            "id":"empty for create",
-            "revision":"read before updating"
+        "name": "CreatorX Agent Interface (MCP + CLI)",
+        "version": env!("CARGO_PKG_VERSION"),
+        "mcp": {
+            "command": "creatorx mcp",
+            "transport": "stdio (JSON-RPC 2.0)"
         },
-        "limits":{"skillFiles":512,"skillTotalMB":64,"skillFileMB":16},
-        "storage":"same application data as GUI; CREATORX_LIBRARY_DIR overrides CLI storage for tests",
-        "output":"JSON: ok/data or ok/error"
+        "commands": [
+            {"usage": "mcp", "effect": "start Model Context Protocol stdio server for Antigravity / Codex / Claude Code"},
+            {"usage": "schema", "effect": "read-only command and data schema"},
+            {"usage": "tag list", "effect": "read controlled tag registry"},
+            {"usage": "tag add --name NAME", "effect": "register a controlled tag"},
+            {"usage": "tag rename --from OLD --to NEW", "effect": "rename a controlled tag across all entries"},
+            {"usage": "tag delete --name NAME", "effect": "delete a controlled tag and strip from entries"},
+            {"usage": "library list [--kind prompt|skill] [--modality text|image|video] [--tag TAG] [--search TEXT]", "effect": "read local showcase entries"},
+            {"usage": "library get ID", "effect": "read complete entry, skill files, and current revision"},
+            {"usage": "library save (--stdin | --file JSON) [--if-revision N]", "effect": "create/update entry (tags must be registered in tag list)"},
+            {"usage": "library delete ID --if-revision N", "effect": "delete entry with revision check"},
+            {"usage": "library import-skill --folder PATH --modality text|image|video [--name NAME] [--tags TAG1,TAG2]", "effect": "import complete Skill folder locally without executing scripts"},
+            {"usage": "library import-image --file PATH", "effect": "copy and deduplicate showcase/reference image bytes locally"},
+            {"usage": "library skill-files ID", "effect": "read relative package file paths"}
+        ],
+        "types": {
+            "kind": "prompt | skill (only 2 base types)",
+            "modality": "text | image | video (only 3 directions)",
+            "tags": "controlled string[] maintained via tag add/rename/delete"
+        }
     })
 }
 
@@ -84,8 +53,31 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
     if args.is_empty() || ["schema", "--help", "-h"].contains(&args[0].as_str()) {
         return Ok(schema());
     }
+    let store = LibraryStore::new(default_library_root()?)?;
+
+    if args[0] == "tag" {
+        let sub = args.get(1).map(String::as_str).ok_or("Missing tag command")?;
+        return match sub {
+            "list" => call_tool(&store, "creatorx_tag_list", &json!({})),
+            "add" => {
+                let name = option(args, "--name")?.ok_or("Missing --name")?;
+                call_tool(&store, "creatorx_tag_add", &json!({ "name": name }))
+            }
+            "rename" => {
+                let from = option(args, "--from")?.ok_or("Missing --from")?;
+                let to = option(args, "--to")?.ok_or("Missing --to")?;
+                call_tool(&store, "creatorx_tag_rename", &json!({ "from": from, "to": to }))
+            }
+            "delete" => {
+                let name = option(args, "--name")?.ok_or("Missing --name")?;
+                call_tool(&store, "creatorx_tag_delete", &json!({ "name": name }))
+            }
+            _ => Err("Unsupported tag command; use schema".into()),
+        };
+    }
+
     if args[0] != "library" {
-        return Err("Use schema to discover supported commands".into());
+        return Err("Use schema or mcp".into());
     }
     let command = args
         .get(1)
@@ -113,61 +105,23 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
             return Err(format!("Unexpected argument {}", args[index]));
         }
     }
-    let store = LibraryStore::new(default_root()?)?;
+
     match command {
-        "tags" => Ok(json!(store.list()?.tags)),
-        "list" => {
-            let kind = option(args, "--kind")?;
-            if kind
-                .as_ref()
-                .is_some_and(|k| !["prompt", "skill"].contains(&k.as_str()))
-            {
-                return Err("kind must be prompt or skill".into());
-            }
-            let modality = option(args, "--modality")?
-                .as_deref()
-                .map(parse_modality)
-                .transpose()?;
-            let tag = option(args, "--tag")?
-                .map(|t| t.trim().trim_start_matches('#').to_string());
-            let search = option(args, "--search")?.unwrap_or_default().to_lowercase();
-            let entries: Vec<_> = store
-                .list()?
-                .entries
-                .into_iter()
-                .filter(|e| {
-                    let matches_kind = kind
-                        .as_ref()
-                        .is_none_or(|k| (k == "prompt") == (e.kind == Kind::Prompt));
-                    matches_kind
-                        && modality.is_none_or(|m| e.modality == m)
-                        && tag.as_ref().is_none_or(|t| e.tags.iter().any(|et| et == t))
-                        && format!(
-                            "{} {} {} {} {} {}",
-                            e.name,
-                            e.prompt,
-                            e.skill_markdown,
-                            e.sample,
-                            e.notes,
-                            e.tags.join(" ")
-                        )
-                        .to_lowercase()
-                        .contains(&search)
-                })
-                .collect();
-            Ok(json!({"entries":entries,"count":entries.len()}))
-        }
+        "tags" => Ok(json!(store.tag_list()?)),
+        "list" => call_tool(
+            &store,
+            "creatorx_asset_list",
+            &json!({
+                "kind": option(args, "--kind")?,
+                "modality": option(args, "--modality")?,
+                "tag": option(args, "--tag")?,
+                "search": option(args, "--search")?,
+            }),
+        ),
         "get" => {
             let id = args.get(2).ok_or("Missing entry ID")?;
-            serde_json::to_value(
-                store
-                    .list()?
-                    .entries
-                    .into_iter()
-                    .find(|entry| &entry.id == id)
-                    .ok_or("Entry not found")?,
-            )
-            .map_err(|e| e.to_string())
+            let res = call_tool(&store, "creatorx_asset_get", &json!({ "id": id }))?;
+            Ok(res["entry"].clone())
         }
         "save" => {
             let file = option(args, "--file")?;
@@ -188,7 +142,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
             if bytes.len() > 2_000_000 {
                 return Err("Input JSON is too large".into());
             }
-            let entry: Entry =
+            let entry: crate::library::Entry =
                 serde_json::from_slice(&bytes).map_err(|e| format!("Invalid entry JSON: {e}"))?;
             let expected = option(args, "--if-revision")?;
             if !entry.id.is_empty() && expected.is_none() {
@@ -206,70 +160,38 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                 .ok_or("Deletes require --if-revision")?
                 .parse()
                 .map_err(|_| "Invalid revision")?;
-            store.delete_entry(id, revision)?;
-            Ok(json!({"deleted": id}))
+            call_tool(
+                &store,
+                "creatorx_asset_delete",
+                &json!({ "id": id, "expectedRevision": revision }),
+            )
         }
         "import-skill" => {
-            let path = PathBuf::from(option(args, "--folder")?.ok_or("Missing --folder")?);
-            if std::fs::symlink_metadata(&path)
-                .map_err(|_| "Cannot read folder")?
-                .file_type()
-                .is_symlink()
-            {
-                return Err("Folder cannot be a symbolic link".into());
-            }
-            let files = LibraryStore::read_package(&path)?;
-            let doc = files
-                .iter()
-                .find(|(name, _)| name == "SKILL.md")
-                .ok_or("Folder root must contain SKILL.md")?;
-            if doc.1.len() > 256_000 {
-                return Err("SKILL.md is too large".into());
-            }
-            let markdown =
-                String::from_utf8(doc.1.clone()).map_err(|_| "SKILL.md must be UTF-8")?;
-            let name = option(args, "--name")?.unwrap_or_else(|| {
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            });
-            let modality = option(args, "--modality")?
-                .as_deref()
-                .map(parse_modality)
-                .transpose()?
-                .unwrap_or(Modality::Image);
+            let folder = option(args, "--folder")?.ok_or("Missing --folder")?;
+            let modality = option(args, "--modality")?.unwrap_or_else(|| "image".into());
             let tags: Vec<String> = option(args, "--tags")?
-                .map(|raw| raw.split(',').map(|s| s.trim().to_string()).collect())
-                .unwrap_or_default();
-            let entry: Entry = serde_json::from_value(json!({
-                "kind":"skill",
-                "modality":modality,
-                "name":name,
-                "skillMarkdown":markdown,
-                "tags":tags
-            }))
-            .map_err(|e| e.to_string())?;
-            let files = files
-                .into_iter()
-                .map(|(path, bytes)| ImportFile {
-                    path,
-                    base64: STANDARD.encode(bytes),
+                .map(|raw| {
+                    raw.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
                 })
-                .collect();
-            serde_json::to_value(store.save(entry, 0, Some(files))?).map_err(|e| e.to_string())
+                .unwrap_or_default();
+            call_tool(
+                &store,
+                "creatorx_skill_import",
+                &json!({
+                    "folderPath": folder,
+                    "modality": modality,
+                    "name": option(args, "--name")?,
+                    "tags": tags
+                }),
+            )
         }
         "import-image" => {
-            let path = PathBuf::from(option(args, "--file")?.ok_or("Missing --file")?);
-            if std::fs::metadata(&path)
-                .map_err(|_| "Cannot read image")?
-                .len()
-                > 12 * 1024 * 1024
-            {
-                return Err("Image exceeds 12 MB".into());
-            }
-            let bytes = std::fs::read(path).map_err(|_| "Cannot read image")?;
-            Ok(json!({"name":store.import_image_bytes(&bytes)?}))
+            let file = option(args, "--file")?.ok_or("Missing --file")?;
+            let res = call_tool(&store, "creatorx_image_import", &json!({ "filePath": file }))?;
+            Ok(json!({ "name": res["image"] }))
         }
         "skill-files" => Ok(json!(
             store.skill_files(args.get(2).ok_or("Missing entry ID")?)?
@@ -294,6 +216,9 @@ pub fn run_if_requested() -> Option<i32> {
         if handle.is_null() || handle as isize == -1 {
             AttachConsole(u32::MAX);
         }
+    }
+    if args[0] == "mcp" {
+        return Some(run_stdio());
     }
     match execute(&args, &mut std::io::stdin()) {
         Ok(data) => {

@@ -6,6 +6,7 @@ mod builtin_skills;
 pub mod cli;
 mod harness;
 mod library;
+pub mod mcp;
 
 #[cfg(target_os = "macos")]
 fn apply_transparent_dock_icon() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,9 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             library::library_list,
-            library::library_save,
-            library::library_delete,
-            library::library_import_image,
+            library::library_state_token,
             library::library_skill_files,
             library::library_open_skill_folder,
             builtin_skills::creation_builtin_skills,
@@ -63,8 +62,6 @@ pub fn run() {
             harness::creation_list,
             harness::creation_start,
             harness::creation_continue,
-            harness::creation_revise_image,
-            harness::creation_promote_showcase,
             harness::creation_cancel,
             harness::creation_open_file,
             harness::creation_directory

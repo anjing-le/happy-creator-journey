@@ -1,7 +1,6 @@
 # CreatorX 客户端协作约束
 
-- **极简 Creation Harness**：CreatorX 构建在本地 Agent（Codex、Antigravity 等）之上，不自建模型或托管凭据。后端分为 `library.rs`（原子样板存储与文件锁）、`harness.rs`（只读快照、独立生图原图保护、沉淀回样板间）与 `adapters/`（可插拔本地 Agent 适配）。详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
-- **首页布局**：上方约七成为 **图文**、**视频** 两张无字安静 IP 蜡笔插画，下方约三成为横跨整行的 **样板间** 无字插画；无可见文字或原生提示，悬停不改变布局尺寸。
-- **原子样板与 `#Tag`**：不设独立的“IP 底座”或多重复杂分类表单。所有资产统一为 **载体（`提示词`／`Skill` 文件夹）＋ 原子能力（`文`／`图`／`视频`）＋ `#Tags`（带已有标签点选复用）＋ 样板展示（图片或文字样例）**。内置保留 `单张生图`、`系列套图`、`原图微调` 三个精简原子 Skill。
-- **组合创作台**：“图文”与“视频”工作台左侧为自然对话＋按 `文/图/视频` 与 `#Tag` 快速勾选细粒度样板；右侧展示 `draft.md` 定稿文稿与生图／改图版本卡片（单张微调引用真实原图且不覆盖旧版，支持一键加 `#Tag` 存回样板间）。
-- **桌面交互与更新**：暖米白配色，统一使用 `Choice` 自定义弹层，禁用原生 `select`／`datalist`。macOS 隐藏左上角三按钮，`Command + W` 隐藏窗口、`Command + Q` 完全退出；支持 `Command + [`／`]` 与鼠标侧键导航。OTA 静默检查、独立签名验签、忙时阻止安装；本机退出无底板图标仅通过 `scripts/macos-file-icon.swift` 在本地安装后设置，不进入发行包。
+- **零传统 CRUD 界面**：桌面前端不做任何添加、编辑、删除按钮、搜索输入框或管理表单；样板间仅为自动热同步的只读画册，创作台仅为对话输入（可勾选引用已有样板）与右侧作品只读展示。
+- **Agent 原生维护（MCP ＋ CLI）**：所有提示词、Skill 文件夹、样板图和受控 Tag 统一通过内置 `creatorx mcp`（Stdio MCP Server）或本地 CLI JSON 接口维护；桌面端 IPC 不暴露资产写入命令。
+- **最简数据模型**：基础类型严格只有 `prompt`（提示词）和 `skill`（文件夹）两种；方向严格只有 `text`（文）、`image`（图）、`video`（视频）三种；Tag 采用 `tags.json` 受控表逐一维护，未登记 Tag 拒绝挂载。
+- **Creation Harness 与桌面规范**：保留 `snapshots/<seq>/` 只读快照锁、独立生图原图保护、可插拔 `AgentAdapter`（Codex 已打通，Antigravity 预留）、暖米白无字插画首页、自定义 `Choice` 弹层、macOS 隐藏三按钮与 `Command + [`／`]` 导航、静默 OTA 及本机安装后 Finder 透明图标脚本边界。
