@@ -94,7 +94,7 @@ GUI 与本地 `creatorx` CLI 共用同一份存储、进程间文件锁与 `revi
   - 本机旧 `0.0.17` 数据已完整备份至私有目录 `archive-v0.0.17/`，活动库清零起步；
   - 后端精简为 `library`（`提示词/Skill` ＋ `文/图/视频` ＋ `#Tag` ＋ 样板图片与文字）、`harness`（只读快照锁、独立生图与原图版本保护、一键存样板）与 `adapters`（`CodexAdapter` 已打通，`AntigravityAdapter` 标准预留）；
   - 前端落地“图文／视频＋样板间”首页、Tag 画廊样板间（含历史标签点选复用）与积木组合式创作台；
-  - 前后端构建、单测、跨进程 CLI 测试、双平台 CI 与三平台更新签名包均验证通过，本机 `~/Applications/CreatorX.app` 已更新至 `0.1.1`。
+  - 前后端构建、单测、跨进程 CLI 测试、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/46015916749)与[三平台更新签名包（46015922544）](https://github.com/anjing-le/happy-creator-journey/actions/runs/46015922544)均验证通过，已公开 [0.1.1 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.1.1)，本机 `~/Applications/CreatorX.app` 已更新至 `0.1.1`。
 - **下一步日常迭代**：
   - [ ] 往干净样板间里逐条沉淀 `#安静` 角色词、常用画风／文风提示词与细粒度创作 Skill，配齐直观样板；
   - [ ] 在真实图文与视频创作中打磨体验，沉淀公开案例至 `cases/` 与 `practices/`；

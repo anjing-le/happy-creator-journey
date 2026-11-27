@@ -17,6 +17,8 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 npm run desktop
 ```
 
+依据：[0.1.1 Release](https://github.com/anjing-le/happy-creator-journey/releases/tag/creatorx-v0.1.1)、[双平台检查](https://github.com/anjing-le/happy-creator-journey/actions/runs/46015916749)、[三平台构建与签名验证](https://github.com/anjing-le/happy-creator-journey/actions/runs/46015922544)。
+
 ## 本机数据与边界说明
 
 - `~/Library/Application Support/cc.anjing.creatorx/archive-v0.0.17/` 保留重构前归档的 41 条旧提示词、16 张参考图、1 个私人 Skill 与 1 条历史创作记录；当前 `library/` 与 `creations/` 保持干净起步。
