@@ -1,8 +1,10 @@
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
+
+mod adapters;
 mod builtin_skills;
 pub mod cli;
-mod codex;
+mod harness;
 mod library;
 
 #[cfg(target_os = "macos")]
@@ -14,8 +16,6 @@ fn apply_transparent_dock_icon() -> Result<(), Box<dyn std::error::Error>> {
     let main_thread = MainThreadMarker::new().ok_or("Dock icon requires the main thread")?;
     let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
     let image = NSImage::initWithData(NSImage::alloc(), &data).ok_or("Invalid Dock icon PNG")?;
-    // Set the original alpha image directly; bundle icons remain the fallback
-    // and continue to serve Finder and launch entries when the app is closed.
     unsafe {
         NSApplication::sharedApplication(main_thread).setApplicationIconImage(Some(&image));
     }
@@ -34,9 +34,6 @@ fn hide_macos_window_controls(
     if pointer.is_null() {
         return Err("Missing native window".into());
     }
-    // Tauri owns this NSWindow for the duration of the main-thread call.
-    // Hide the controls without changing the closable/resizable window style,
-    // so the native Command+W menu action and existing hide/reopen flow still work.
     let native = unsafe { &*pointer.cast::<NSWindow>() };
     for kind in [
         NSWindowButton::CloseButton,
@@ -57,19 +54,24 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             library::library_list,
             library::library_save,
+            library::library_delete,
+            library::library_save_ip,
             library::library_import_image,
             library::library_skill_files,
             library::library_open_skill_folder,
             library::library_add_category,
             library::library_move_category,
             builtin_skills::creation_builtin_skills,
-            codex::codex_status,
-            codex::creation_list,
-            codex::creation_start,
-            codex::creation_continue,
-            codex::creation_cancel,
-            codex::creation_open_file,
-            codex::creation_directory
+            harness::adapter_list,
+            harness::creation_list,
+            harness::creation_start,
+            harness::creation_continue,
+            harness::creation_save_blueprint,
+            harness::creation_render_slot,
+            harness::creation_promote_showcase,
+            harness::creation_cancel,
+            harness::creation_open_file,
+            harness::creation_directory
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -82,7 +84,7 @@ pub fn run() {
             app.manage(library::LibraryStore::new(
                 app.path().app_data_dir()?.join("library"),
             )?);
-            app.manage(codex::CodexEngine::new(
+            app.manage(harness::HarnessEngine::new(
                 app.path().app_data_dir()?.join("creations"),
             )?);
             let chinese = std::env::var("LANG").unwrap_or_default().starts_with("zh");
@@ -122,7 +124,7 @@ pub fn run() {
         .expect("failed to start CreatorX");
     app.run(|app, event| {
         if let tauri::RunEvent::Exit = event {
-            app.state::<codex::CodexEngine>().shutdown();
+            app.state::<harness::HarnessEngine>().shutdown();
         }
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {

@@ -3,28 +3,33 @@ import test from 'node:test';
 import { initialNavigation, navigationKey, navigationMouse, navigationReducer } from '../src/navigation.ts';
 
 test('back and forward restore visited routes and clamp at both ends', () => {
-  let state = navigationReducer(initialNavigation, { type: 'visit', route: { page: 'creation', name: '图片' } });
+  let state = navigationReducer(initialNavigation, { type: 'visit', route: { page: 'studio', name: '图文' } });
   state = navigationReducer(state, { type: 'back' });
   assert.equal(state.history[state.position].page, 'home');
   assert.equal(navigationReducer(state, { type: 'back' }).position, 0);
   state = navigationReducer(state, { type: 'forward' });
-  assert.deepEqual(state.history[state.position], { page: 'creation', name: '图片' });
+  assert.deepEqual(state.history[state.position], { page: 'studio', name: '图文' });
   assert.equal(navigationReducer(state, { type: 'forward' }).position, 1);
 });
-test('visiting another page after going back replaces the forward branch', () => {
-  let state = navigationReducer(initialNavigation, { type: 'visit', route: { page: 'creation', name: '文' } });
+
+test('visiting showcase after going back replaces the forward branch', () => {
+  let state = navigationReducer(initialNavigation, { type: 'visit', route: { page: 'studio', name: '图文' } });
   state = navigationReducer(state, { type: 'back' });
-  state = navigationReducer(state, { type: 'visit', route: { page: 'library' } });
-  assert.deepEqual(state.history, [{ page: 'home' }, { page: 'library' }]);
+  state = navigationReducer(state, { type: 'visit', route: { page: 'showcase' } });
+  assert.deepEqual(state.history, [{ page: 'home' }, { page: 'showcase' }]);
   assert.equal(navigationReducer(state, { type: 'forward' }).position, 1);
-  assert.equal(navigationReducer(state, { type: 'visit', route: { page: 'library' } }), state);
+  assert.equal(navigationReducer(state, { type: 'visit', route: { page: 'showcase' } }), state);
 });
-test('rapid consecutive navigation always uses the latest history position', () => {
+
+test('launching studio from showcase records exact template launch route', () => {
   let state = initialNavigation;
-  for (const name of ['文', '图片', '视频']) state = navigationReducer(state, { type: 'visit', route: { page: 'creation', name } });
+  state = navigationReducer(state, { type: 'visit', route: { page: 'showcase' } });
+  state = navigationReducer(state, { type: 'visit', route: { page: 'studio', name: '图文', launch: { deliverable: 'article', skillId: 'builtin:article-illustrated', track: '计算机', nonce: 1 } } });
+  state = navigationReducer(state, { type: 'visit', route: { page: 'studio', name: '视频' } });
   state = navigationReducer(navigationReducer(state, { type: 'back' }), { type: 'back' });
-  assert.deepEqual(state.history[state.position], { page: 'creation', name: '文' });
+  assert.deepEqual(state.history[state.position], { page: 'showcase' });
 });
+
 test('Command brackets work with physical bracket keys and ignore editing modifiers or IME composition', () => {
   const key = { key: '[', code: 'BracketLeft', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, isComposing: false };
   assert.equal(navigationKey(key), 'back');

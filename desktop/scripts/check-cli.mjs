@@ -20,5 +20,10 @@ try {
   assert.equal(stale.status, 1); assert.equal(JSON.parse(stale.stderr).ok, false);
   call(['library', 'add-category', '--name', 'Empty category']);
   assert.ok(call(['library', 'categories']).includes('Empty category'));
-  console.log('Packaged native CLI: JSON output, shared storage, empty categories and stale-write protection passed.');
+  const savedIp = call(['library', 'save-ip', '--stdin'], JSON.stringify({ name: 'Anjing', visualPrompt: 'crayon', images: [], voicePrompt: 'concise', voiceSample: '', tracks: [{ name: '计算机', positioning: 'AI' }], revision: 0 }));
+  assert.equal(savedIp.revision, 1);
+  assert.equal(call(['library', 'ip']).name, 'Anjing');
+  call(['library', 'delete', first.id, '--if-revision', String(first.revision)]);
+  assert.equal(call(['library', 'list']).count, 0);
+  console.log('Packaged native CLI: JSON output, IP foundation, shared storage, empty categories, delete and stale-write protection passed.');
 } finally { rmSync(root, { recursive: true, force: true }); }

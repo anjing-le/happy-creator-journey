@@ -1,8 +1,11 @@
 //! Local CLI: invokes the same store as the desktop app without launching a webview.
-use crate::library::{Entry, ImportFile, Kind, LibraryStore};
+use crate::library::{DeliverableFormat, Entry, ImportFile, IpFoundation, Kind, LibraryStore, Maturity};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
-use std::{io::Read, path::PathBuf};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+};
 
 fn default_root() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("CREATORX_LIBRARY_DIR") {
@@ -21,6 +24,7 @@ fn default_root() -> Result<PathBuf, String> {
         );
     Ok(base.join("cc.anjing.creatorx/library"))
 }
+
 fn option(args: &[String], key: &str) -> Result<Option<String>, String> {
     if let Some(index) = args.iter().position(|arg| arg == key) {
         return args
@@ -32,20 +36,74 @@ fn option(args: &[String], key: &str) -> Result<Option<String>, String> {
     }
     Ok(None)
 }
-fn schema() -> Value {
-    json!({"name":"CreatorX CLI","version":env!("CARGO_PKG_VERSION"),"commands":[
-        {"usage":"schema","effect":"read-only command and data schema"},
-        {"usage":"library list [--kind prompt|skill] [--category NAME] [--search TEXT]","effect":"read local entries"},
-        {"usage":"library get ID","effect":"read complete entry and prompt"},
-        {"usage":"library save (--stdin | --file JSON) [--if-revision N]","effect":"create/update entry; updates require current revision; Skill saves create/update a real folder"},
-        {"usage":"library import-skill --folder PATH [--name NAME] [--category NAME]","effect":"copy complete folder locally; scripts are never executed"},
-        {"usage":"library clear-categories","effect":"remove all category assignments; preserve materials"},
-        {"usage":"library categories","effect":"read categories, including empty ones"},
-        {"usage":"library add-category --name NAME","effect":"create a category without replacing existing categories"},
-        {"usage":"library skill-files ID","effect":"read relative package file paths"},
-        {"usage":"library import-image --file PATH","effect":"copy and deduplicate reference image bytes locally"}
-    ],"entry":{"kind":"prompt|skill","name":"required","prompt":"required for prompt","skillMarkdown":"SKILL.md for skill","category":"empty means unclassified","tags":"string[]","notes":"string","images":"stored image hashes","id":"empty for create","revision":"read before updating"},"limits":{"skillFiles":512,"skillTotalMB":64,"skillFileMB":16},"storage":"same application data as GUI; CREATORX_LIBRARY_DIR overrides CLI storage for tests","output":"JSON: ok/data or ok/error"})
+
+fn read_json_input(args: &[String], input: &mut dyn Read) -> Result<Vec<u8>, String> {
+    let file = option(args, "--file")?;
+    let stdin = args.iter().any(|arg| arg == "--stdin");
+    if stdin == file.is_some() {
+        return Err("Choose exactly one of --stdin or --file".into());
+    }
+    let bytes = if let Some(path) = file {
+        std::fs::read(path).map_err(|_| "Cannot read input file")?
+    } else {
+        let mut bytes = Vec::new();
+        input
+            .take(2_000_001)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read stdin")?;
+        bytes
+    };
+    if bytes.len() > 2_000_000 {
+        return Err("Input JSON is too large".into());
+    }
+    Ok(bytes)
 }
+
+fn parse_deliverable(value: &str) -> Result<DeliverableFormat, String> {
+    match value {
+        "general" => Ok(DeliverableFormat::General),
+        "cards" => Ok(DeliverableFormat::Cards),
+        "article" => Ok(DeliverableFormat::Article),
+        "video" => Ok(DeliverableFormat::Video),
+        _ => Err("deliverable must be general, cards, article, or video".into()),
+    }
+}
+
+fn parse_maturity(value: &str) -> Result<Maturity, String> {
+    match value {
+        "showcase" => Ok(Maturity::Showcase),
+        "draft" => Ok(Maturity::Draft),
+        _ => Err("maturity must be showcase or draft".into()),
+    }
+}
+
+fn schema() -> Value {
+    json!({
+        "name":"CreatorX CLI",
+        "version":env!("CARGO_PKG_VERSION"),
+        "commands":[
+            {"usage":"schema","effect":"read-only command and data schema"},
+            {"usage":"library ip","effect":"read creator IP foundation"},
+            {"usage":"library save-ip (--stdin | --file JSON) [--if-revision N]","effect":"save creator IP foundation with revision check"},
+            {"usage":"library list [--kind prompt|skill] [--deliverable general|cards|article|video] [--track NAME] [--maturity showcase|draft] [--category NAME] [--search TEXT]","effect":"read local showcase and draft entries"},
+            {"usage":"library get ID","effect":"read complete entry and prompt/SKILL.md"},
+            {"usage":"library save (--stdin | --file JSON) [--if-revision N]","effect":"create/update entry; updates require current revision; Skill saves create/update a real folder"},
+            {"usage":"library delete ID --if-revision N","effect":"delete entry with revision check"},
+            {"usage":"library import-skill --folder PATH [--name NAME] [--category NAME] [--deliverable cards|article|video] [--track NAME] [--maturity showcase|draft]","effect":"copy complete folder locally; scripts are never executed"},
+            {"usage":"library clear-categories","effect":"remove all category assignments; preserve materials"},
+            {"usage":"library categories","effect":"read categories, including empty ones"},
+            {"usage":"library add-category --name NAME","effect":"create a category without replacing existing categories"},
+            {"usage":"library skill-files ID","effect":"read relative package file paths"},
+            {"usage":"library import-image --file PATH","effect":"copy and deduplicate reference/showcase image bytes locally"}
+        ],
+        "ip":{"name":"string","visualPrompt":"string","images":"stored image hashes","voicePrompt":"string","voiceSample":"string","tracks":"[{name,positioning}]","revision":"read before updating"},
+        "entry":{"kind":"prompt|skill","name":"required","deliverable":"general|cards|article|video","track":"empty means general track","maturity":"showcase|draft","sampleInput":"string","sampleOutput":"string","prompt":"required for prompt","skillMarkdown":"SKILL.md for skill","category":"empty means unclassified","tags":"string[]","notes":"string","images":"stored image hashes","id":"empty for create","revision":"read before updating"},
+        "limits":{"skillFiles":512,"skillTotalMB":64,"skillFileMB":16},
+        "storage":"same application data as GUI; CREATORX_LIBRARY_DIR overrides CLI storage for tests",
+        "output":"JSON: ok/data or ok/error"
+    })
+}
+
 pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
     if args.is_empty() || ["schema", "--help", "-h"].contains(&args[0].as_str()) {
         return Ok(schema());
@@ -58,10 +116,25 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
         .map(String::as_str)
         .ok_or("Missing library command")?;
     let allowed: &[&str] = match command {
-        "list" => &["--kind", "--category", "--search"],
-        "save" => &["--stdin", "--file", "--if-revision"],
-        "import-skill" => &["--folder", "--name", "--category"],
-        "get" | "skill-files" | "categories" | "clear-categories" => &[],
+        "list" => &[
+            "--kind",
+            "--category",
+            "--deliverable",
+            "--track",
+            "--maturity",
+            "--search",
+        ],
+        "save" | "save-ip" => &["--stdin", "--file", "--if-revision"],
+        "delete" => &["--if-revision"],
+        "import-skill" => &[
+            "--folder",
+            "--name",
+            "--category",
+            "--deliverable",
+            "--track",
+            "--maturity",
+        ],
+        "ip" | "get" | "skill-files" | "categories" | "clear-categories" => &[],
         "add-category" => &["--name"],
         "import-image" => &["--file"],
         _ => return Err("Unsupported command; use schema".into()),
@@ -73,7 +146,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                 return Err(format!("Unsupported option {}", args[index]));
             }
             index += if args[index] == "--stdin" { 1 } else { 2 };
-        } else if ["get", "skill-files"].contains(&command) && index == 2 {
+        } else if ["get", "skill-files", "delete"].contains(&command) && index == 2 {
             index += 1;
         } else {
             return Err(format!("Unexpected argument {}", args[index]));
@@ -81,6 +154,17 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
     }
     let store = LibraryStore::new(default_root()?)?;
     match command {
+        "ip" => serde_json::to_value(store.get_ip()?).map_err(|e| e.to_string()),
+        "save-ip" => {
+            let bytes = read_json_input(args, input)?;
+            let ip: IpFoundation =
+                serde_json::from_slice(&bytes).map_err(|e| format!("Invalid IP JSON: {e}"))?;
+            let expected = option(args, "--if-revision")?
+                .unwrap_or_else(|| ip.revision.to_string())
+                .parse()
+                .map_err(|_| "Invalid revision")?;
+            serde_json::to_value(store.save_ip(ip, expected)?).map_err(|e| e.to_string())
+        }
         "list" => {
             let kind = option(args, "--kind")?;
             if kind
@@ -89,6 +173,15 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
             {
                 return Err("kind must be prompt or skill".into());
             }
+            let deliverable = option(args, "--deliverable")?
+                .as_deref()
+                .map(parse_deliverable)
+                .transpose()?;
+            let maturity = option(args, "--maturity")?
+                .as_deref()
+                .map(parse_maturity)
+                .transpose()?;
+            let track = option(args, "--track")?;
             let category = option(args, "--category")?;
             let search = option(args, "--search")?.unwrap_or_default().to_lowercase();
             let entries: Vec<_> = store
@@ -100,13 +193,18 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                         .as_ref()
                         .is_none_or(|k| (k == "prompt") == (e.kind == Kind::Prompt));
                     matches_kind
+                        && deliverable.is_none_or(|d| e.deliverable == d)
+                        && maturity.is_none_or(|m| e.maturity == m)
+                        && track.as_ref().is_none_or(|t| &e.track == t)
                         && category.as_ref().is_none_or(|c| c == &e.category)
                         && format!(
-                            "{} {} {} {} {}",
+                            "{} {} {} {} {} {} {}",
                             e.name,
                             e.prompt,
                             e.skill_markdown,
+                            e.sample_output,
                             e.notes,
+                            e.track,
                             e.tags.join(" ")
                         )
                         .to_lowercase()
@@ -128,24 +226,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
             .map_err(|e| e.to_string())
         }
         "save" => {
-            let file = option(args, "--file")?;
-            let stdin = args.iter().any(|arg| arg == "--stdin");
-            if stdin == file.is_some() {
-                return Err("Choose exactly one of --stdin or --file".into());
-            }
-            let bytes = if let Some(path) = file {
-                std::fs::read(path).map_err(|_| "Cannot read input file")?
-            } else {
-                let mut bytes = Vec::new();
-                input
-                    .take(2_000_001)
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| "Cannot read stdin")?;
-                bytes
-            };
-            if bytes.len() > 2_000_000 {
-                return Err("Input JSON is too large".into());
-            }
+            let bytes = read_json_input(args, input)?;
             let entry: Entry =
                 serde_json::from_slice(&bytes).map_err(|e| format!("Invalid entry JSON: {e}"))?;
             let expected = option(args, "--if-revision")?;
@@ -157,6 +238,15 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                 .parse()
                 .map_err(|_| "Invalid revision")?;
             serde_json::to_value(store.save(entry, revision, None)?).map_err(|e| e.to_string())
+        }
+        "delete" => {
+            let id = args.get(2).ok_or("Missing entry ID")?;
+            let revision: u64 = option(args, "--if-revision")?
+                .ok_or("Deletes require --if-revision")?
+                .parse()
+                .map_err(|_| "Invalid revision")?;
+            store.delete_entry(id, revision)?;
+            Ok(json!({"deleted": id}))
         }
         "import-skill" => {
             let path = PathBuf::from(option(args, "--folder")?.ok_or("Missing --folder")?);
@@ -183,7 +273,26 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                     .to_string_lossy()
                     .into_owned()
             });
-            let entry: Entry = serde_json::from_value(json!({"kind":"skill","name":name,"skillMarkdown":markdown,"category":option(args,"--category")?.unwrap_or_default()})).map_err(|e| e.to_string())?;
+            let deliverable = option(args, "--deliverable")?
+                .as_deref()
+                .map(parse_deliverable)
+                .transpose()?
+                .unwrap_or(DeliverableFormat::Cards);
+            let maturity = option(args, "--maturity")?
+                .as_deref()
+                .map(parse_maturity)
+                .transpose()?
+                .unwrap_or(Maturity::Showcase);
+            let entry: Entry = serde_json::from_value(json!({
+                "kind":"skill",
+                "name":name,
+                "skillMarkdown":markdown,
+                "category":option(args,"--category")?.unwrap_or_default(),
+                "deliverable":deliverable,
+                "track":option(args,"--track")?.unwrap_or_default(),
+                "maturity":maturity
+            }))
+            .map_err(|e| e.to_string())?;
             let files = files
                 .into_iter()
                 .map(|(path, bytes)| ImportFile {
@@ -208,18 +317,7 @@ pub fn execute(args: &[String], input: &mut dyn Read) -> Result<Value, String> {
                 return Err("Image exceeds 12 MB".into());
             }
             let bytes = std::fs::read(path).map_err(|_| "Cannot read image")?;
-            let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-                "image/png"
-            } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-                "image/jpeg"
-            } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-                "image/webp"
-            } else {
-                return Err("Expected PNG, JPEG, or WebP".into());
-            };
-            Ok(
-                json!({"name":store.import_image(&format!("data:{mime};base64,{}", STANDARD.encode(bytes)))?}),
-            )
+            Ok(json!({"name":store.import_image_bytes(&bytes)?}))
         }
         "skill-files" => Ok(json!(
             store.skill_files(args.get(2).ok_or("Missing entry ID")?)?
@@ -235,7 +333,6 @@ pub fn run_if_requested() -> Option<i32> {
     }
     #[cfg(target_os = "windows")]
     unsafe {
-        // GUI-subsystem builds still support redirected stdout and parent consoles.
         #[link(name = "kernel32")]
         unsafe extern "system" {
             fn GetStdHandle(kind: u32) -> *mut std::ffi::c_void;
@@ -248,11 +345,11 @@ pub fn run_if_requested() -> Option<i32> {
     }
     match execute(&args, &mut std::io::stdin()) {
         Ok(data) => {
-            println!("{}", json!({"ok":true,"data":data}));
+            let _ = writeln!(std::io::stdout(), "{}", json!({"ok":true,"data":data}));
             Some(0)
         }
         Err(error) => {
-            eprintln!("{}", json!({"ok":false,"error":error}));
+            let _ = writeln!(std::io::stderr(), "{}", json!({"ok":false,"error":error}));
             Some(1)
         }
     }
