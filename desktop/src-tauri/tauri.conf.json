@@ -33,6 +33,7 @@
         "enable": true,
         "scope": [
           "$APPDATA/library/images/**",
+          "$APPDATA/works/media/**",
           "$APPDATA/creations/**"
         ]
       }
